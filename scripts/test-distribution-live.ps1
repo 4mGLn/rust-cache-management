@@ -8,6 +8,7 @@ $null=New-Item -ItemType Directory -Path $temp
 $previousInstallDir=$env:RUST_CACHE_INSTALL_DIR
 $previousBinDir=$env:RUST_CACHE_BIN_DIR
 $previousPath=$env:PATH
+$fixtureFailure=$null
 try {
     $latest=$null
     for ($attempt=0;$attempt -lt 12;$attempt++) {
@@ -59,10 +60,26 @@ try {
         & node (Join-Path $PSScriptRoot 'test-agent-setup.mjs') (Join-Path $env:RUST_CACHE_INSTALL_DIR "releases/$current/bin/rust-cache-inspect.exe") (Join-Path $env:RUST_CACHE_BIN_DIR 'rust-cache-management.ps1')
         if ($LASTEXITCODE) { throw 'Published packaged agent setup failed' }
     }
-    Write-Output "Live latest Windows installer passed: mode=$Mode latest=$latest current=$current; actual scan5bytes, fixture preserved."
+} catch {
+    $fixtureFailure=$_
+    [Console]::Error.WriteLine('Original Live Windows installer fixture failure: '+$_.ToString())
+    [Console]::Error.WriteLine($_.ScriptStackTrace)
+    throw
 } finally {
-    $env:RUST_CACHE_INSTALL_DIR=$previousInstallDir
-    $env:RUST_CACHE_BIN_DIR=$previousBinDir
-    $env:PATH=$previousPath
-    Remove-Item -LiteralPath $temp -Recurse -Force
+    $cleanupFailure=$null
+    try {
+        for ($attempt=0;$attempt -le 10;$attempt++) {
+            try { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction Stop }; break }
+            catch {
+                if ($attempt -eq 10) { $cleanupFailure=$_; [Console]::Error.WriteLine('Live Windows fixture cleanup failure: '+$_.ToString()) }
+                else { [Threading.Thread]::Sleep(100*($attempt+1)) }
+            }
+        }
+    } finally {
+        $env:RUST_CACHE_INSTALL_DIR=$previousInstallDir
+        $env:RUST_CACHE_BIN_DIR=$previousBinDir
+        $env:PATH=$previousPath
+    }
+    if ($cleanupFailure -and -not $fixtureFailure) { throw $cleanupFailure }
 }
+Write-Output "Live latest Windows installer passed: mode=$Mode latest=$latest current=$current; actual scan5bytes, fixture preserved."

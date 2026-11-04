@@ -11,6 +11,8 @@ const payload=dirname(dirname(binary));
 const wrapper=process.argv[3]?resolve(process.argv[3]):null;
 const installation=dirname(dirname(payload));
 const wrapperState=[];
+let primaryError;
+const cleanupErrors=[];
 const temp=realpathSync(mkdtempSync(join(tmpdir(),'rcm-native-agents-')));
 const environmentDigest=()=>createHash('sha256').update(JSON.stringify(process.env)).digest('hex');
 const parentEnv=environmentDigest();
@@ -50,8 +52,14 @@ function runWrapped(home,args,code=0) {
   const command=process.platform==='win32'?join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'):wrapper;
   const prefix=process.platform==='win32'?['-NoLogo','-NoProfile','-File',wrapper]:[];
   const result=spawnSync(command,[...prefix,'agents',...args,'--json'],{env,cwd:temp,encoding:'utf8',timeout:30000,stdio:['ignore','pipe','pipe']});
-  assert.ifError(result.error);assert.equal(result.status,code,JSON.stringify(result));
-  const parsed=JSON.parse(result.stdout);assert.equal(parsed.schema_version,1);return parsed;
+  const diagnostic={command,args,pid:result.pid,status:result.status,signal:result.signal,error:result.error?.message,stdout:result.stdout?.slice(-16384),stderr:result.stderr?.slice(-16384)};
+  console.error('Management wrapper subprocess finished:',JSON.stringify({pid:result.pid,status:result.status,signal:result.signal,error:result.error?.message}));
+  if(result.error)throw new Error('Management wrapper subprocess failed: '+JSON.stringify(diagnostic),{cause:result.error});
+  assert.equal(result.status,code,JSON.stringify(diagnostic));
+  let parsed;
+  try { parsed=JSON.parse(result.stdout); }
+  catch(error) { throw new Error('Management wrapper JSON failed: '+JSON.stringify(diagnostic),{cause:error}); }
+  assert.equal(parsed.schema_version,1);return parsed;
 }
 function setup(home,extra=[],code=0) { return run(home,['setup','--agent','codex','--scope','user',...extra],code); }
 function copyManual(destination) {
@@ -143,12 +151,27 @@ try {
       writeFileSync(path,name==='last-check'?'0\n':'enabled\n');wrapperState.push(path);
     }
     const wrappedBefore=snapshot(wrappedHome);
+    console.error('Agent setup fixture stage: management wrapper preview');
     assert.equal(runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject,'--dry-run']).status,'planned');
+    console.error('Agent setup fixture stage: management wrapper missing consent');
     assert.equal(runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject],4).status,'consent_required');
     assert.equal(snapshot(wrappedHome),wrappedBefore);assert(!existsSync(join(wrappedProject,'.agents')));
     assert.equal(readFileSync(join(installation,'last-check'),'utf8'),'0\n','Agent forwarding performed an automatic update check');
     assert.equal(readFileSync(join(installation,'auto-update'),'utf8'),'enabled\n');
   }
   assert.equal(environmentDigest(),parentEnv,'Parent environment changed');
-  console.log('Native packaged agent setup passed: JSON, preview, consent, user/project apply, shared/native5provider mappings, all12textfiles, repeat, manual reuse, duplicates, modified-file preservation, Unicode paths.'+(wrapper?' Management wrapper preview/exit4 and auto-check bypass passed.':''));
-} finally { for(const path of wrapperState)unlinkSync(path);rmSync(temp,{recursive:true,force:true}); }
+  console.error('Agent setup fixture stage: behavior checks complete; cleanup');
+} catch(error) {
+  primaryError=error;
+  // Print first: Windows file locks must never hide the original assertion/process failure.
+  console.error('Original agent setup fixture failure:',error?.stack ?? String(error));
+} finally {
+  for(const path of wrapperState) {
+    try { unlinkSync(path); } catch(error) { cleanupErrors.push(error);console.error('Agent setup marker cleanup failure:',error?.stack ?? String(error)); }
+  }
+  try { rmSync(temp,{recursive:true,force:true,maxRetries:process.platform==='win32'?10:0,retryDelay:100}); }
+  catch(error) { cleanupErrors.push(error);console.error('Agent setup directory cleanup failure:',error?.stack ?? String(error)); }
+}
+if(primaryError)throw primaryError;
+if(cleanupErrors.length)throw new AggregateError(cleanupErrors,'Agent setup fixture cleanup failed');
+console.log('Native packaged agent setup passed: JSON, preview, consent, user/project apply, shared/native5provider mappings, all12textfiles, repeat, manual reuse, duplicates, modified-file preservation, Unicode paths.'+(wrapper?' Management wrapper preview/exit4 and auto-check bypass passed.':''));

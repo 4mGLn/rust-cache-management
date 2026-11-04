@@ -38,6 +38,7 @@ function global:curl.exe {
     Copy-Item -LiteralPath (Join-Path $global:FixtureAssets $relative) -Destination $out
     $global:LASTEXITCODE=0
 }
+$fixtureFailure=$null
 try {
     $actualVersion='v'+([regex]::Match([IO.File]::ReadAllText((Join-Path $root 'Cargo.toml')),'(?m)^version = "([^"]+)"')).Groups[1].Value
     foreach ($v in (@('v0.2.0','v0.3.0',$actualVersion) | Select-Object -Unique)) {
@@ -136,13 +137,42 @@ try {
     $detect=& (Join-Path $internal 'bin/rust-cache-management.cmd') agents detect --json
     if ($LASTEXITCODE) { throw 'Management agent forwarding failed' }
     $null=($detect -join "`n") | ConvertFrom-Json
-    Write-Output 'Native Windows installer fixture passed: package, install, launcher, read-only scan, update, rollback, local modifications.'
+} catch {
+    $fixtureFailure=$_
+    [Console]::Error.WriteLine('Original Windows installer fixture failure: '+$_.ToString())
+    [Console]::Error.WriteLine($_.ScriptStackTrace)
+    throw
 } finally {
-    Remove-Item -LiteralPath $temp -Recurse -Force
-    Remove-Item Function:\curl.exe
-    Remove-Variable FixtureAssets -Scope Global
-    Remove-Variable FixtureLatestMode -Scope Global
-    Remove-Variable FixtureLatestVersion -Scope Global
-    $env:RUST_CACHE_INSTALL_DIR=$previousInstallDir
-    $env:RUST_CACHE_BIN_DIR=$previousBinDir
+    $cleanupFailure=$null
+    try {
+        for ($attempt=0;$attempt -le 10;$attempt++) {
+            try { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction Stop }; break }
+            catch {
+                if ($attempt -eq 10) { $cleanupFailure=$_; [Console]::Error.WriteLine('Windows installer fixture cleanup failure: '+$_.ToString()) }
+                else { [Threading.Thread]::Sleep(100*($attempt+1)) }
+            }
+        }
+    } finally {
+        try {
+            try {
+                if (Test-Path -LiteralPath Function:\global:curl.exe) { Remove-Item -LiteralPath Function:\global:curl.exe -ErrorAction Stop }
+            } catch {
+                if (-not $cleanupFailure) { $cleanupFailure=$_ }
+                [Console]::Error.WriteLine('Windows fixture mock restoration failure: '+$_.ToString())
+            }
+            foreach ($fixtureVariable in @('FixtureAssets','FixtureLatestMode','FixtureLatestVersion')) {
+                try {
+                    if ($null -ne $ExecutionContext.SessionState.PSVariable.Get('global:'+$fixtureVariable)) { Remove-Variable -Name $fixtureVariable -Scope Global -ErrorAction Stop }
+                } catch {
+                    if (-not $cleanupFailure) { $cleanupFailure=$_ }
+                    [Console]::Error.WriteLine('Windows fixture variable restoration failure: '+$_.ToString())
+                }
+            }
+        } finally {
+            $env:RUST_CACHE_INSTALL_DIR=$previousInstallDir
+            $env:RUST_CACHE_BIN_DIR=$previousBinDir
+        }
+    }
+    if ($cleanupFailure -and -not $fixtureFailure) { throw $cleanupFailure }
 }
+Write-Output 'Native Windows installer fixture passed: package, install, launcher, read-only scan, update, rollback, local modifications.'
