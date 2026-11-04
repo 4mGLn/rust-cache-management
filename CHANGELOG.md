@@ -2,6 +2,8 @@
 
 ## 0.2.2 — 2026-11-04
 
+- Allow verified same-scope identical managed/fresh OpenCode aliases for combined and sequential agent setup; keep manual, modified, uncertain and Gemini alias conflicts blocked.
+- Preserve Windows native host essentials in isolated setup fixtures, add PowerShell stdio controls, and enforce explicit bounded cleanup retry delays.
 - Preserve original fixture failures before bounded Windows cleanup retries, restore caller state even after cleanup errors, and report success only after cleanup completes.
 - Use streaming .NET SHA-256 in the Windows manager and scope native PowerShell module lookup inside wrappers, preserving legacy bootstrap bytes and restoring caller module paths.
 - Keep Windows archive/download native arguments relative to a Unicode-safe working directory; isolate POSIX fixture overrides and retain bounded failure diagnostics for shell portability verification.

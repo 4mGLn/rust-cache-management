@@ -876,6 +876,16 @@ fn plan(
                 if e.agents.is_disjoint(&consumers) {
                     return false;
                 }
+                // OpenCode resolves identical owned compatibility aliases as
+                // one catalog ID. Do not extend this exception to Gemini or
+                // uncertified manual, modified, or old-version copies.
+                if e.path != path
+                    && e.scope == opt.scope
+                    && opencode_only_overlap(&e.agents, &consumers)
+                    && matches!(check_record(ctx, &e.path, payload), Ok(true))
+                {
+                    return false;
+                }
                 // Ordinary Codex user/project layering is supported. If Gemini is
                 // present, its cross-tier duplicate warning still requires review.
                 !(agents.len() == 1
@@ -936,9 +946,14 @@ fn plan(
                         .iter()
                         .find(|r| other.parent() == Some(r.path.as_path()))
                         .is_some_and(|r| {
-                            r.agents
+                            let overlap = r
+                                .agents
                                 .intersection(&consumers)
-                                .any(|id| opt.selected.contains(id))
+                                .any(|id| opt.selected.contains(id));
+                            overlap
+                                && !(opencode_only_overlap(&r.agents, &consumers)
+                                    && managed_or_new(ctx, &path, payload)
+                                    && managed_or_new(ctx, other, payload))
                         })
                 })
         {
@@ -948,6 +963,16 @@ fn plan(
         result.push(action);
     }
     Ok(result)
+}
+fn opencode_only_overlap(a: &BTreeSet<String>, b: &BTreeSet<String>) -> bool {
+    let mut common = a.intersection(b);
+    common.next().is_some_and(|id| id == "opencode") && common.next().is_none()
+}
+fn managed_or_new(ctx: &Context, path: &Path, payload: &Payload) -> bool {
+    if matches!(exists(path), Ok(false)) && matches!(exists(&record_path(ctx, path)), Ok(false)) {
+        return true;
+    }
+    matches!(check_record(ctx, path, payload), Ok(true))
 }
 fn install(ctx: &Context, action: &Action, payload: &Payload) -> io::Result<()> {
     let root = action
@@ -1086,6 +1111,7 @@ pub fn run(args: Vec<OsString>) -> i32 {
     }
     let parsed = parse(args);
     let mut response=Response{schema_version:1,command:"agents".into(),scope:"user".into(),dry_run:false,status:"invalid".into(),agents:Vec::new(),actions:Vec::new(),errors:Vec::new(),warnings:vec!["Discovery covers bounded mapped roots and treats valid child skill directories as leaves; custom sources, nested skills inside existing skills, plugins, enterprise rules and future versions may need manual review. Existing files are never overwritten. Use stable trusted directories: path checks are not a security sandbox against concurrent hostile replacements. No update/rollback is implemented for agent copies.".into()]};
+    response.warnings.push("OpenCode may see identical current managed aliases as one catalog ID, with documented .agents over .claude precedence. Manual, modified, or uncertain overrides still require review; Gemini duplicate registrations remain conflicts.".into());
     let code = match parsed {
         Err(e) => {
             response.errors.push(e);

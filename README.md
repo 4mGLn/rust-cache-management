@@ -10,6 +10,7 @@ Repository: **https://github.com/4mGLn/rust-cache-management**. The URL identifi
 
 ```sh
 rust-cache-management agents detect --json
+rust-cache-management agents setup --all-detected --scope user --dry-run --json
 rust-cache-management agents setup --agent codex,gemini --scope user --dry-run --json
 rust-cache-management agents setup --agent codex --scope project --project /absolute/project --dry-run --json
 ```

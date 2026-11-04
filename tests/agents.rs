@@ -342,7 +342,17 @@ fn concurrent_setup_preserves_exactly_one_complete_copy() {
     let (ca, ja) = Fixture::output(a.wait_with_output().unwrap());
     let (cb, jb) = Fixture::output(b.wait_with_output().unwrap());
     assert!(ca == 0 || cb == 0, "{ja} {jb}");
-    assert!([0, 1].contains(&ca) && [0, 1].contains(&cb), "{ja} {jb}");
+    // A competing read-only preflight can observe the exclusive ownership
+    // record before atomic directory publication and conservatively refuse.
+    assert!(
+        [0, 1, 3].contains(&ca) && [0, 1, 3].contains(&cb),
+        "{ja} {jb}"
+    );
+    for (code, json) in [(ca, &ja), (cb, &jb)] {
+        if code == 3 {
+            assert_eq!(json["status"], "conflict", "{json}");
+        }
+    }
     let (c, j) = f.run(&args);
     assert_eq!(c, 0, "{j}");
     assert_eq!(j["actions"][0]["status"], "managed_reuse");
@@ -560,4 +570,106 @@ fn opencode_file_configuration_and_custom_xdg_require_manual_review() {
         .unwrap();
     let (code, json) = Fixture::output(output);
     assert_eq!(code, 0, "{json}");
+}
+
+#[test]
+fn all_five_agents_share_only_compatible_identical_managed_aliases() {
+    let f = Fixture::new();
+    let args = [
+        "setup",
+        "--agent",
+        "codex,claude,gemini,opencode,hermes",
+        "--yes",
+        "--json",
+    ];
+    let (code, json) = f.run(&args);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["actions"].as_array().unwrap().len(), 3);
+    for root in [".agents", ".claude", ".hermes"] {
+        let skill = f.home.join(root).join("skills/rust-cache-management");
+        assert_eq!(
+            fs::read(skill.join("SKILL.md")).unwrap(),
+            fs::read(f.skill().join("SKILL.md")).unwrap()
+        );
+    }
+    assert!(json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains(".agents over .claude")));
+    let (code, json) = f.run(&args);
+    assert_eq!(code, 0, "{json}");
+    assert!(json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["status"] == "managed_reuse"));
+}
+
+#[test]
+fn sequential_codex_and_claude_owned_copies_coexist_in_either_order() {
+    for agents in [["codex", "claude"], ["claude", "codex"]] {
+        let f = Fixture::new();
+        for id in agents {
+            let (code, json) = f.run(&["setup", "--agent", id, "--yes", "--json"]);
+            assert_eq!(code, 0, "{id}: {json}");
+        }
+        for id in agents {
+            let (code, json) = f.run(&["setup", "--agent", id, "--yes", "--json"]);
+            assert_eq!(code, 0, "{id}: {json}");
+            assert_eq!(json["actions"][0]["status"], "managed_reuse");
+        }
+    }
+}
+
+#[test]
+fn manual_or_modified_opencode_aliases_still_block_new_provider_copy() {
+    for (manual, selected) in [(".claude", "codex"), (".agents", "claude")] {
+        let f = Fixture::new();
+        let path = f.home.join(manual).join("skills/rust-cache-management");
+        f.manual(&path);
+        let before = fs::read(path.join("SKILL.md")).unwrap();
+        let (code, json) = f.run(&["setup", "--agent", selected, "--yes", "--json"]);
+        assert_eq!(code, 3, "{json}");
+        assert_eq!(fs::read(path.join("SKILL.md")).unwrap(), before);
+        assert!(!f.home.join(".rust-cache-management-setup").exists());
+    }
+    let f = Fixture::new();
+    let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    fs::write(f.skill().join("README.md"), "user modifications\n").unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "claude", "--yes", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(
+        fs::read(f.skill().join("README.md")).unwrap(),
+        b"user modifications\n"
+    );
+    assert!(!f.home.join(".claude").exists());
+}
+
+#[test]
+fn identical_owned_gemini_aliases_remain_a_conflict() {
+    let f = Fixture::new();
+    let (code, json) = f.run(&["setup", "--agent", "gemini", "--yes", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    let native = f.home.join(".gemini/skills/rust-cache-management");
+    fs::create_dir_all(native.join("references")).unwrap();
+    for name in TEXT {
+        fs::copy(f.skill().join(name), native.join(name)).unwrap();
+    }
+    let record_path = |path: &Path| {
+        f.home.join(".rust-cache-management-setup").join(format!(
+            "{:x}.json",
+            Sha256::digest(path.to_string_lossy().as_bytes())
+        ))
+    };
+    let mut record: Value =
+        serde_json::from_slice(&fs::read(record_path(&f.skill())).unwrap()).unwrap();
+    record["target"] = serde_json::to_value(&native).unwrap();
+    fs::write(record_path(&native), serde_json::to_vec(&record).unwrap()).unwrap();
+    let before = fs::read(native.join("SKILL.md")).unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "gemini", "--yes", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(fs::read(native.join("SKILL.md")).unwrap(), before);
+    assert_eq!(fs::read(f.skill().join("SKILL.md")).unwrap(), before);
 }

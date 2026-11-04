@@ -5,6 +5,7 @@ import {mkdtempSync,mkdirSync,readdirSync,readFileSync,writeFileSync,copyFileSyn
 import {tmpdir} from 'node:os';
 import {join,dirname,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import {setTimeout as wait} from 'node:timers/promises';
 const binary=resolve(process.argv[2] || '');
 assert(process.argv[2], 'Usage: node scripts/test-agent-setup.mjs PACKAGED_BINARY [MANAGEMENT_WRAPPER]');
 const payload=dirname(dirname(binary));
@@ -21,7 +22,7 @@ function makeHome(name) {
   const home=join(temp,name); mkdirSync(home); return home;
 }
 function environment(home) {
-  return {HOME:home,USERPROFILE:home,PATH:join(temp,'empty-path'),XDG_CONFIG_HOME:join(home,'.config'),XDG_DATA_HOME:join(home,'.local','share'),XDG_STATE_HOME:join(home,'.local','state'),APPDATA:join(home,'AppData','Roaming'),LOCALAPPDATA:join(home,'AppData','Local'),TEMP:temp,TMP:temp,...(process.platform==='win32'?{SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR}:{} )};
+  return {HOME:home,USERPROFILE:home,PATH:join(temp,'empty-path'),XDG_CONFIG_HOME:join(home,'.config'),XDG_DATA_HOME:join(home,'.local','share'),XDG_STATE_HOME:join(home,'.local','state'),APPDATA:join(home,'AppData','Roaming'),LOCALAPPDATA:join(home,'AppData','Local'),TEMP:temp,TMP:temp,...(process.platform==='win32'?{SystemRoot:process.env.SystemRoot,WINDIR:process.env.WINDIR,PATHEXT:process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD',ComSpec:process.env.ComSpec || join(process.env.SystemRoot,'System32','cmd.exe')}:{} )};
 }
 function snapshot(root,allowLinks=false) {
   const entries=[];
@@ -50,9 +51,9 @@ function runWrapped(home,args,code=0) {
   const env=environment(home);
   env.PATH=process.platform==='win32'?join(process.env.SystemRoot,'System32'):'/usr/bin:/bin';
   const command=process.platform==='win32'?join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe'):wrapper;
-  const prefix=process.platform==='win32'?['-NoLogo','-NoProfile','-File',wrapper]:[];
+  const prefix=process.platform==='win32'?['-NoLogo','-NoProfile','-NonInteractive','-File',wrapper]:[];
   const result=spawnSync(command,[...prefix,'agents',...args,'--json'],{env,cwd:temp,encoding:'utf8',timeout:30000,stdio:['ignore','pipe','pipe']});
-  const diagnostic={command,args,pid:result.pid,status:result.status,signal:result.signal,error:result.error?.message,stdout:result.stdout?.slice(-16384),stderr:result.stderr?.slice(-16384)};
+  const diagnostic={command,args,parentCwd:process.cwd(),childCwd:temp,pid:result.pid,status:result.status,signal:result.signal,error:result.error?.message,stdout:result.stdout?.slice(-16384),stderr:result.stderr?.slice(-16384)};
   console.error('Management wrapper subprocess finished:',JSON.stringify({pid:result.pid,status:result.status,signal:result.signal,error:result.error?.message}));
   if(result.error)throw new Error('Management wrapper subprocess failed: '+JSON.stringify(diagnostic),{cause:result.error});
   assert.equal(result.status,code,JSON.stringify(diagnostic));
@@ -60,6 +61,31 @@ function runWrapped(home,args,code=0) {
   try { parsed=JSON.parse(result.stdout); }
   catch(error) { throw new Error('Management wrapper JSON failed: '+JSON.stringify(diagnostic),{cause:error}); }
   assert.equal(parsed.schema_version,1);return parsed;
+}
+function windowsHostControls(home) {
+  const pe=readFileSync(binary),offset=pe.readUInt32LE(0x3c);
+  assert.equal(pe.toString('ascii',offset,offset+4),'PE\0\0');
+  const subsystem=pe.readUInt16LE(offset+24+68);
+  assert.equal(subsystem,3,'Packaged binary must be a console executable');
+  console.error('Packaged Windows PE subsystem:',subsystem);
+  const target=Buffer.from(binary,'utf8').toString('base64');
+  let properResult;
+  for(const [mode,keepPathExt,keepComSpec,pipeline] of [
+    ['legacy-incomplete',false,false,false],['pathext-only',true,false,false],
+    ['comspec-only',false,true,false],['windows-essentials',true,true,false],
+    ['legacy-forced-pipeline',false,false,true]]) {
+    const script=join(temp,'host-control-'+mode+'.ps1');
+    writeFileSync(script,"$ErrorActionPreference='Stop'\n$exe=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"+target+"'))\n& $exe @args"+(pipeline?' | ForEach-Object { $_ }':'')+"\nexit $LASTEXITCODE\n");
+    const env=environment(home);env.PATH=join(process.env.SystemRoot,'System32');
+    if(!keepPathExt)delete env.PATHEXT;if(!keepComSpec)delete env.ComSpec;
+    const command=join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
+    const result=spawnSync(command,['-NoLogo','-NoProfile','-NonInteractive','-File',script,'agents','--help'],{env,cwd:temp,encoding:'utf8',timeout:30000,stdio:['ignore','pipe','pipe']});
+    let jsonStatus;try {jsonStatus=JSON.parse(result.stdout).status;}catch {jsonStatus='not-json';}
+    // Deliberately incomplete environments are diagnostic controls, never evidence of a passing product test.
+    console.error('Windows native host control:',JSON.stringify({mode,subsystem,pid:result.pid,status:result.status,signal:result.signal,error:result.error?.message,jsonStatus,stdoutBytes:Buffer.byteLength(result.stdout || ''),stderr:result.stderr?.slice(-4096),parentCwd:process.cwd(),childCwd:temp}));
+    if(mode==='windows-essentials')properResult={status:result.status,jsonStatus,error:result.error?.message};
+  }
+  assert.equal(properResult.status,0,JSON.stringify(properResult));assert.equal(properResult.jsonStatus,'help',JSON.stringify(properResult));
 }
 function setup(home,extra=[],code=0) { return run(home,['setup','--agent','codex','--scope','user',...extra],code); }
 function copyManual(destination) {
@@ -150,11 +176,15 @@ try {
       const path=join(installation,name);assert(!existsSync(path),'Wrapper bypass fixture requires initial auto-update off');
       writeFileSync(path,name==='last-check'?'0\n':'enabled\n');wrapperState.push(path);
     }
+    if(process.platform==='win32')windowsHostControls(wrappedHome);
     const wrappedBefore=snapshot(wrappedHome);
     console.error('Agent setup fixture stage: management wrapper preview');
-    assert.equal(runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject,'--dry-run']).status,'planned');
+    const preview=runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject,'--dry-run']);
+    assert.equal(preview.status,'planned');
+    assert(preview.actions[0].target.endsWith(join("wrapper project ' unicode 한글",'.agents','skills','rust-cache-management')),'Wrapper JSON target lost Unicode/path arguments');
     console.error('Agent setup fixture stage: management wrapper missing consent');
     assert.equal(runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject],4).status,'consent_required');
+    assert.equal(runWrapped(wrappedHome,['setup','--agent','','--scope','user','--dry-run'],2).status,'invalid','Empty selector must fail without writes');
     assert.equal(snapshot(wrappedHome),wrappedBefore);assert(!existsSync(join(wrappedProject,'.agents')));
     assert.equal(readFileSync(join(installation,'last-check'),'utf8'),'0\n','Agent forwarding performed an automatic update check');
     assert.equal(readFileSync(join(installation,'auto-update'),'utf8'),'enabled\n');
@@ -169,8 +199,14 @@ try {
   for(const path of wrapperState) {
     try { unlinkSync(path); } catch(error) { cleanupErrors.push(error);console.error('Agent setup marker cleanup failure:',error?.stack ?? String(error)); }
   }
-  try { rmSync(temp,{recursive:true,force:true,maxRetries:process.platform==='win32'?10:0,retryDelay:100}); }
-  catch(error) { cleanupErrors.push(error);console.error('Agent setup directory cleanup failure:',error?.stack ?? String(error)); }
+  const cleanupRetries=process.platform==='win32'?10:0;
+  for(let attempt=0;attempt<=cleanupRetries;attempt++) {
+    try { rmSync(temp,{recursive:true,force:true,maxRetries:0});break; }
+    catch(error) {
+      if(attempt===cleanupRetries) { cleanupErrors.push(error);console.error('Agent setup directory cleanup failure:',error?.stack ?? String(error)); }
+      else { console.error('Agent setup cleanup retry:',JSON.stringify({attempt:attempt+1,code:error.code}));await wait(100*(attempt+1)); }
+    }
+  }
 }
 if(primaryError)throw primaryError;
 if(cleanupErrors.length)throw new AggregateError(cleanupErrors,'Agent setup fixture cleanup failed');
