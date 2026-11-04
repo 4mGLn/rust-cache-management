@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.3 — 2026-11-05
 
 - Add explicit native `agents verify` version/catalog probes with isolated runtime state, bounded Unix process groups and structured evidence; keep detect/setup nonexecuting and distinguish unchecked detection from verified isolated catalog discovery. Use bounded private metadata-file snapshots for Hermes to contain catalog hub writes, report parser-only evidence separately, and disable Python bytecode-cache writes. Windows verification reports unsupported platform without executing providers.
 - Preserve and warn about unrelated dangling skill-discovery links instead of aborting setup with an unqualified missing-file error; keep reserved Rust skill paths, discovery roots and other scan failures blocked. Document that any selected-agent conflict prevents all selected writes.
 - Limit discovery reads to skill frontmatter, allowing existing long skill bodies while retaining a 64 KiB header limit and strict metadata validation with file-specific errors.
+
+Verification limits: Windows native verification is unsupported; Hermes snapshot results prove parsing only. Custom OpenCode sources and Hermes profile/source configurations still require manual review.
 
 ## 0.2.2 — 2026-11-04
 

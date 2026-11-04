@@ -1,6 +1,6 @@
 # rust-cache-management
 
-Version **0.2.2**, updated **2026-11-04**.
+Version **0.2.3**, updated **2026-11-05**.
 
 [Repository](https://github.com/4mGLn/rust-cache-management) · [Releases](https://github.com/4mGLn/rust-cache-management/releases)
 
@@ -75,7 +75,7 @@ Invoke-WebRequest 'https://github.com/4mGLn/rust-cache-management/releases/lates
 & ./install.ps1
 ```
 
-If GitHub cannot resolve latest, returns an invalid version or an unexpected redirect, installation stops without activating a payload. For advanced reproducibility, `--version v0.2.2` / `-Version v0.2.2` selects a published version explicitly; use its matching reviewed installer too. An alternate repository can be selected with `--repo owner/repository` / `-Repository owner/repository` and is recorded for later updates.
+If GitHub cannot resolve latest, returns an invalid version or an unexpected redirect, installation stops without activating a payload. For advanced reproducibility, `--version v0.2.3` / `-Version v0.2.3` selects a published version explicitly; use its matching reviewed installer too. An alternate repository can be selected with `--repo owner/repository` / `-Repository owner/repository` and is recorded for later updates.
 
 Unix keeps its payload at `$HOME/.local/share/rust-cache-management` and creates executable **regular shell wrappers**, not symlinks, at `$HOME/.local/bin/rust-cache-inspect` and `$HOME/.local/bin/rust-cache-management`. The primary `rust-cache-inspect` wrapper executes the existing prefix launcher with the same arguments and exit status. The secondary command shows help with no arguments or `--help`, and supports `status`, `update`, `rollback`, `auto-on`, `auto-off`, and `inspect`. Help performs no update check.
 

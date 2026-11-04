@@ -28,7 +28,7 @@ Invoke-WebRequest 'https://github.com/4mGLn/rust-cache-management/releases/lates
 & ./install.ps1
 ```
 
-A missing latest release, an HTTP lookup failure, an invalid version or an unexpected/ambiguous redirect stops activation. The final lookup redirect must identify the selected repository's HTTPS GitHub release tag. Advanced reproducibility can use an explicitly reviewed matching-version installer and `--version v0.2.2` / `-Version v0.2.2`; this is optional, not the default installation path.
+A missing latest release, an HTTP lookup failure, an invalid version or an unexpected/ambiguous redirect stops activation. The final lookup redirect must identify the selected repository's HTTPS GitHub release tag. Advanced reproducibility can use an explicitly reviewed matching-version installer and `--version v0.2.3` / `-Version v0.2.3`; this is optional, not the default installation path.
 
 See the [repository](https://github.com/4mGLn/rust-cache-management) and [release list](https://github.com/4mGLn/rust-cache-management/releases) for publication status. A configured post-publication check is not evidence until it completes.
 
