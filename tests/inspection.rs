@@ -230,17 +230,36 @@ fn inaccessible_directory_reports_partial_scan() {
 
 #[cfg(unix)]
 #[test]
-fn accepts_non_utf8_paths_and_marks_lossy_display() {
+fn non_utf8_paths_report_filesystem_result_and_lossy_display() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
     let fixture = Fixture::new();
     let path = fixture.path().join(OsString::from_vec(vec![b'd', 0xff]));
-    fs::create_dir(&path).unwrap();
-    fs::write(path.join("file"), b"data").unwrap();
-    let result = inspect(&path, 100);
-    assert!(result.complete_scan, "{:?}", result.errors);
-    assert!(result.path_encoding_lossy);
-    assert_eq!(result.logical_file_bytes, 4);
+    match fs::create_dir(&path) {
+        Ok(()) => {
+            fs::write(path.join("file"), b"data").unwrap();
+            let result = inspect(&path, 100);
+            assert!(result.complete_scan, "{:?}", result.errors);
+            assert!(result.path_encoding_lossy);
+            assert_eq!(result.logical_file_bytes, 4);
+        }
+        // Darwin EILSEQ is 92. Native macOS CI rejects this filename at
+        // creation; validate the helper's filesystem error instead of skipping
+        // coverage or assuming every Unix filesystem accepts arbitrary bytes.
+        #[cfg(target_os = "macos")]
+        Err(error) if error.raw_os_error() == Some(92) => {
+            let expected_error = fs::symlink_metadata(&path).unwrap_err().to_string();
+            let result = inspect(&path, 100);
+            assert!(!result.complete_scan);
+            assert!(result.path_encoding_lossy);
+            assert_eq!(result.errors_total, 1);
+            assert_eq!(result.errors, vec![expected_error]);
+            assert_eq!(result.entries_seen, 0);
+            assert_eq!(result.logical_file_bytes, 0);
+            assert!(result.canonical_path_at_start.is_none());
+        }
+        Err(error) => panic!("Unexpected non-UTF-8 fixture creation error: {error}"),
+    }
 }
 
 #[cfg(windows)]
