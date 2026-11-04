@@ -54,6 +54,10 @@ try {
     Invoke-Expression ([IO.File]::ReadAllText((Join-Path $root 'install.ps1')))
     & (Join-Path $env:RUST_CACHE_BIN_DIR 'rust-cache-management.cmd') --help
     if ($LASTEXITCODE) { throw 'IEX rerun management alias failed' }
+    # The IEX source defines the product Hash function in this private fixture scope.
+    $knownBytes=Join-Path $temp 'known-hash-bytes'
+    [IO.File]::WriteAllBytes($knownBytes,[byte[]]@(0,1,127,128,255))
+    if ((Hash $knownBytes) -cne (Get-FileHash -Algorithm SHA256 -LiteralPath $knownBytes).Hash.ToLowerInvariant()) { throw 'Streaming .NET hash differs from independent native hash' }
     $explicit=Join-Path $temp 'explicit-prefix'
     & (Join-Path $root 'install.ps1') -Prefix $explicit -BinDir (Join-Path $temp 'explicit commands') | Out-Null
     if (-not (Test-Path -LiteralPath (Join-Path $explicit 'current'))) { throw 'Explicit Prefix did not override application environment' }
@@ -82,6 +86,11 @@ try {
     if ($LASTEXITCODE) { throw 'External management status failed' }
     & (Join-Path $env:RUST_CACHE_BIN_DIR 'rust-cache-inspect.cmd') --fixture-invalid-argument
     if ($LASTEXITCODE -ne 2) { throw 'External command lost diagnostic invalid-argument exit2' }
+    $savedModulePath=$env:PSModulePath
+    & (Join-Path $env:RUST_CACHE_BIN_DIR 'rust-cache-management.ps1') status
+    if ($LASTEXITCODE -or $env:PSModulePath -cne $savedModulePath) { throw 'Direct wrapper status failed or changed caller module path' }
+    & (Join-Path $env:RUST_CACHE_BIN_DIR 'rust-cache-management.ps1') --fixture-invalid-argument
+    if ($LASTEXITCODE -ne 2 -or $env:PSModulePath -cne $savedModulePath) { throw 'Direct failing wrapper lost exit2 or changed caller module path' }
     & (Join-Path $prefix 'manage.ps1') -Action Status | Out-Null
     & (Join-Path $prefix 'bin/rust-cache-inspect.cmd') --version
     if ($LASTEXITCODE) { throw 'Installed native Windows launcher failed' }

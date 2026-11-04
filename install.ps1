@@ -24,7 +24,14 @@ function Assert-PlainPath([string]$Path) {
         $p = $parent.FullName
     }
 }
-function Hash([string]$Path) { (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+function Hash([string]$Path) {
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        $stream=[IO.File]::OpenRead($Path)
+        try { ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant() }
+        finally { $stream.Dispose() }
+    } finally { $sha.Dispose() }
+}
 function Write-Text([string]$Path,[string]$Text) { [IO.File]::WriteAllText($Path,$Text + "`n",(New-Object Text.UTF8Encoding($false))) }
 function Read-Plain([string]$Path) {
     Assert-PlainPath $Path
@@ -70,13 +77,29 @@ function New-Text([string]$Path,[string]$Text) {
     $stream=[IO.File]::Open($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
     try { $stream.Write($bytes,0,$bytes.Length) } finally { $stream.Dispose() }
 }
+function With-NativeModules([string]$Body) {
+    # WinPS children can inherit an incompatible PowerShell 7 module search path.
+    # Scope the engine-native modules first and restore even for direct & invocation.
+    $before=@'
+$rcmSavedModulePath=$env:PSModulePath
+try {
+    $rcmNativeModules=[IO.Path]::Combine($PSHOME,'Modules')
+    if ($rcmSavedModulePath) { $env:PSModulePath=$rcmNativeModules+[IO.Path]::PathSeparator+$rcmSavedModulePath }
+    else { $env:PSModulePath=$rcmNativeModules }
+'@
+    $after=@'
+} finally { $env:PSModulePath=$rcmSavedModulePath }
+'@
+    $before+"`n"+$Body+"`n"+$after
+}
 function Export-Text([string]$Name,[string]$Extension) {
     if ($Extension -eq '.cmd') { return ('@powershell.exe -NoLogo -NoProfile -File "%~dp0'+$Name+'.ps1" %*') }
     # Windows PowerShell 5 reads no-BOM scripts as ANSI. Keep exported code ASCII-only.
     $target=Join-Path $Prefix ('bin/'+$Name+'.ps1')
     $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target))
     $q=[string][char]39
-    return ('$ErrorActionPreference='+$q+'Stop'+$q+"`n"+'$target=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('+$q+$encoded+$q+'))'+"`n"+'& $target @args'+"`n"+'exit $LASTEXITCODE')
+    $body=('$ErrorActionPreference='+$q+'Stop'+$q+"`n"+'$target=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('+$q+$encoded+$q+'))'+"`n"+'& $target @args'+"`n"+'exit $LASTEXITCODE')
+    With-NativeModules $body
 }
 function Text-Hash([string]$Text) {
     $sha=[Security.Cryptography.SHA256]::Create()
@@ -171,7 +194,7 @@ if ($forward[0] -eq 'inspect') { $forward=@($forward | Select-Object -Skip 1) }
 & (Join-Path $root 'bin/rust-cache-inspect.ps1') @forward
 exit $LASTEXITCODE
 '@
-        New-Text $primaryPath $primary
+        New-Text $primaryPath (With-NativeModules $primary)
         New-Text (Join-Path $Prefix 'bin/rust-cache-management.cmd') '@powershell.exe -NoLogo -NoProfile -File "%~dp0rust-cache-management.ps1" %*'
         foreach ($name in @('bin/rust-cache-management.ps1','bin/rust-cache-management.cmd')) { New-Text (Join-Path $Prefix ($name+'.sha256')) (Hash (Join-Path $Prefix $name)) }
     }
