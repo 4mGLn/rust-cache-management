@@ -1,6 +1,6 @@
 # Read-only inspection and cleanup planning
 
-Use only the sections needed. This guide contains no deletion commands. The optional standalone Rust helper, `rust-cache-inspect --path /absolute/verified/target`, accepts explicit verified paths only and outputs read-only JSON diagnostics; see [../README.md](../README.md) for usage and limitations. It requires no Python runtime. Updating the installed tool is a separate operation and is not part of the diagnostic executable.
+Use only the sections needed. This guide contains no deletion commands. The optional standalone Rust helper, `rust-cache-inspect --path /absolute/verified/target`, accepts explicit verified paths only and outputs read-only JSON diagnostics; see [../README.md](../README.md) for usage and limitations. It requires no Python runtime. Updating the installed tool is a separate operation. The explicit `agents setup --yes` subcommand writes selected agent skill files; ordinary `--path` diagnosis, `agents detect`, and setup dry-run are read-only. Read [distribution.md](distribution.md#agent-skill-setup) only when agent setup is requested.
 
 ## Resolve paths before measuring
 

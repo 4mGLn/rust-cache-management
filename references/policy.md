@@ -8,6 +8,10 @@ This reference retains the supplied policy with researched clarifications. Read 
 - When disk space is low, identify actual cache paths and shared users. Coordinate active builds, preview selective cleanup, and obtain required approval. If uncertain, do not delete.
 - Keep incremental compilation and debug settings aligned with the project; change them only when justified.
 
+## Agent registration is separate
+
+Explicit agent setup may install this skill into a reviewed user/project scope after consent. It must preserve existing skills and configuration and must not grant project trust or authorize cache deletion. Detection/preview and ordinary disk diagnosis remain read-only. See [distribution.md](distribution.md#agent-skill-setup) when setup is requested; do not load provider configuration or all references for unrelated cache diagnosis.
+
 ## Objective
 
 Preserve build correctness and reuse valid artifacts while controlling disk usage and avoiding unnecessary recompilation.

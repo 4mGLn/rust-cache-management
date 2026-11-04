@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — 2026-11-04
+
+- Add explicit agent discovery/setup with user/project preview, consent, structured results, conflict preservation and repeatable managed registration; keep ordinary disk diagnosis read-only. Add isolated native-CI fixtures for packaged setup, compatible shared registration, manual/duplicate handling and wrapper consent/auto-check bypass.
+- Forward management `agents ...` directly to the activated binary without rewriting legacy bootstraps or changing the fixed payload schema; document agent/version/alias and project-trust limits.
+- Make repeat installation safely validate/reuse or update an intact managed prefix, including legacy 0.2.0 prefixes, while preserving original bootstrap code and user modifications.
+- Export regular executable Unix wrappers under `~/.local/bin` for primary `rust-cache-inspect` and secondary help/management command `rust-cache-management`; preserve argument quoting and exit status.
+- Add explicit bin-directory options/application environment, collision preflight, missing-PATH guidance, and Windows command aliases without editing shell profiles or persistent PATH.
+- Add explicit Unix system mode with root guard and validated persistent readable permissions; never invoke sudo or convert private installs in place.
+- Extend isolated HOME, wrapper, repeated-install, baseline, permission-mode and native/live CI fixtures. Native Windows/macOS execution and publication must be reported from actual new run results.
+
 ## 0.2.1 — 2026-11-04
 
 - Make the primary Unix and Windows one-line commands resolve the latest stable release without version arguments; retain optional explicit version selection.

@@ -1,9 +1,10 @@
+mod agents;
 use rust_cache_inspect::{report, DEFAULT_MAX_ENTRIES, MAX_ENTRIES};
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
-const HELP: &str = "rust-cache-inspect — read-only diagnostics for explicit cache directories\n\nUsage: rust-cache-inspect --path DIRECTORY [--path DIRECTORY ...] [--max-entries NUMBER]\n\n  --path DIRECTORY      Explicit, verified directory to inspect; repeat as needed\n  --max-entries NUMBER  Per-path entry budget, 1..10000000 (default 100000)\n  --help, -h            Show this help\n  --version, -V         Show version\n\nOutputs JSON. Never invokes Cargo or changes cache/configuration files.\nPaths containing links/reparse ancestors are rejected. No tilde/environment expansion.\nExit codes: 0 = complete within skip policy; 1 = errors or scan budget exhausted;\n2 = invalid arguments or output failure. Skips do not establish cleanup safety.\n";
+const HELP: &str = "rust-cache-inspect — read-only diagnostics for explicit cache directories\n\nUsage: rust-cache-inspect --path DIRECTORY [--path DIRECTORY ...] [--max-entries NUMBER]\n\n  --path DIRECTORY      Explicit, verified directory to inspect; repeat as needed\n  --max-entries NUMBER  Per-path entry budget, 1..10000000 (default 100000)\n  --help, -h            Show this help\n  --version, -V         Show version\n\nAgent integration: rust-cache-inspect agents detect --json\n  rust-cache-inspect agents setup --agent codex,gemini --scope user --dry-run --json\n  Add --yes to create skill copies and setup records; existing files are preserved. Project scope requires --project ABSOLUTE_DIRECTORY. agents --help lists setup exit codes.\n\nOutputs JSON. Never invokes Cargo or changes cache/configuration files.\nPaths containing links/reparse ancestors are rejected. No tilde/environment expansion.\nExit codes: 0 = complete within skip policy; 1 = errors or scan budget exhausted;\n2 = invalid arguments or output failure. Skips do not establish cleanup safety.\n";
 
 fn argument_value(
     args: &mut impl Iterator<Item = OsString>,
@@ -13,7 +14,11 @@ fn argument_value(
 }
 
 fn run() -> Result<i32, String> {
-    let mut args = std::env::args_os().skip(1);
+    let values: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if values.first().is_some_and(|arg| arg == "agents") {
+        return Ok(agents::run(values.into_iter().skip(1).collect()));
+    }
+    let mut args = values.into_iter();
     let mut paths = Vec::new();
     let mut limit = DEFAULT_MAX_ENTRIES;
     let mut seen_limit = false;

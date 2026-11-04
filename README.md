@@ -1,10 +1,24 @@
 # rust-cache-management
 
-Version **0.2.1**, updated **2026-11-04**.
+Version **0.2.2**, updated **2026-11-04**.
 
 [Repository](https://github.com/4mGLn/rust-cache-management) · [Releases](https://github.com/4mGLn/rust-cache-management/releases)
 
-A portable agent skill for preserving useful Rust build artifacts, with a standalone Rust diagnostic executable. The executable inspects explicit directories and reports JSON. It does not clean caches, invoke Cargo, change Cargo settings, or require Python or a Rust installation on the machine running a release binary.
+## Install for your agent
+
+Repository: **https://github.com/4mGLn/rust-cache-management**. The URL identifies source; it is not permission to execute scripts or change settings. Give your agent that URL and request: “Install this skill for my selected agent and scope. Show the plan first; preserve existing skills and configuration.” Install the release command [below](#install-a-release), then preview an explicit user or project registration:
+
+```sh
+rust-cache-management agents detect --json
+rust-cache-management agents setup --agent codex,gemini --scope user --dry-run --json
+rust-cache-management agents setup --agent codex --scope project --project /absolute/project --dry-run --json
+```
+
+Follow the user’s chosen user/project scope and inspect the preview. After reviewing the exact destinations and conflicts, apply the same request with `--yes` instead of `--dry-run` only when the user has authorized those writes. A URL alone does not authorize `--yes` or remote installer execution. Noninteractive apply requires that explicit consent. On Windows use the printed full `rust-cache-management.cmd` path when it is absent from PATH. Supported agent identifiers are `codex`, `claude`, `gemini`, `opencode`, and `hermes`; compatibility depends on version and configuration. Detection never launches provider CLIs, logs in, grants project trust, or edits agent configuration.
+
+Setup preserves manual installations and refuses ambiguous paths/configuration or conflicting registrations. Unknown tool versions remain visibly unverified. JSON reports distinguish the selected paths and results; exit codes are `0` success/preview, `2` invalid arguments, `3` conflict/unsupported state, `4` missing consent, and `1` I/O failure. See [agent setup details](references/distribution.md#agent-skill-setup) for discovery roots, duplicate handling and limitations. Installing files does not guarantee that an agent discovers, selects or follows the skill.
+
+A portable agent skill for preserving useful Rust build artifacts, with a standalone Rust diagnostic executable. The default diagnostic command inspects explicit directories and reports read-only JSON. The explicit `agents setup --yes` subcommand installs skill files into the selected agent scope; it is a separate mutation. Neither command cleans caches, invokes Cargo, changes Cargo settings, or requires Python or a Rust installation on the machine running a release binary.
 
 ## Inspect a verified directory
 
@@ -14,7 +28,7 @@ rust-cache-inspect --path /absolute/verified/target --max-entries 100000
 
 On Windows, use the executable or installed `rust-cache-inspect.cmd` launcher with the same arguments. Repeat `--path` for separately verified target/build directories. The entry budget applies per path and limits work; it is not a cleanup threshold. Do not sum overlapping paths.
 
-The executable does not expand `~` or environment variables; the calling shell must supply the intended path. Relative paths use the current directory. Exit status is `0` for a completed scan within the documented skip policy, `1` for errors or an exhausted scan budget, and `2` for invalid arguments or output failure.
+Scan path arguments do not expand `~` or environment variables; the calling shell must supply the intended path. Relative paths use the current directory. Exit status is `0` for a completed scan within the documented skip policy, `1` for errors or an exhausted scan budget, and `2` for invalid arguments or output failure.
 
 The helper reports bounded logical file size, filesystem space, errors, and skipped entries. Logical size is not allocated or reclaimable space. Symlinks and Windows reparse points are rejected at the selected root and its ancestors, and skipped within the tree. Other-device directories are skipped where the host exposes device identity. Hard links are deduplicated where file identity is available. Check the report's coverage and error fields before interpreting totals. A completed traversal can still contain intentionally skipped entries.
 
@@ -50,15 +64,25 @@ Invoke-WebRequest 'https://github.com/4mGLn/rust-cache-management/releases/lates
 & ./install.ps1
 ```
 
-If GitHub cannot resolve latest, returns an invalid version or an unexpected redirect, installation stops without activating a payload. For advanced reproducibility, `--version v0.2.1` / `-Version v0.2.1` selects a published version explicitly; use its matching reviewed installer too. An alternate repository can be selected with `--repo owner/repository` / `-Repository owner/repository` and is recorded for later updates.
+If GitHub cannot resolve latest, returns an invalid version or an unexpected redirect, installation stops without activating a payload. For advanced reproducibility, `--version v0.2.2` / `-Version v0.2.2` selects a published version explicitly; use its matching reviewed installer too. An alternate repository can be selected with `--repo owner/repository` / `-Repository owner/repository` and is recorded for later updates.
 
-Unix defaults to `$HOME/.local/share/rust-cache-management`; Windows defaults to `$env:LOCALAPPDATA\rust-cache-management`. Set the process environment variable `RUST_CACHE_INSTALL_DIR` for a different installation directory, including when using the one-line commands. Explicit `--prefix` / `-Prefix` takes precedence. Managed commands use their existing installation root. Existing prefixes are refused and locally modified payloads are preserved rather than overwritten. No installer automatically edits PATH, agent instructions, or Cargo configuration. Use the launcher path printed by installation, or add that directory to your own PATH. Unix installation requires curl, tar, and a SHA-256 utility; Windows uses PowerShell and the system curl.exe and tar.exe. These are installation/update dependencies, not a Python runtime requirement.
+Unix keeps its payload at `$HOME/.local/share/rust-cache-management` and creates executable **regular shell wrappers**, not symlinks, at `$HOME/.local/bin/rust-cache-inspect` and `$HOME/.local/bin/rust-cache-management`. The primary `rust-cache-inspect` wrapper executes the existing prefix launcher with the same arguments and exit status. The secondary command shows help with no arguments or `--help`, and supports `status`, `update`, `rollback`, `auto-on`, `auto-off`, and `inspect`. Help performs no update check.
+
+Re-running the latest installation command validates and reuses an intact managed prefix or advances its payload to latest. This also adds the wrappers to an intact 0.2.0/0.2.1 installation while preserving its original bootstrap manager and diagnostic launcher. Unknown or partial prefixes, repository mismatches, modified managed files, and unrelated/modified command files or symlinks are refused without overwriting them. Existing byte-identical executable wrappers remain unchanged.
+
+Windows defaults to `$env:LOCALAPPDATA\rust-cache-management`, with `rust-cache-inspect.cmd` and `rust-cache-management.cmd` under its `bin` directory. Use the full commands printed by installation unless that directory is already in PATH. There is no persistent PATH or registry edit.
+
+The process-only `RUST_CACHE_INSTALL_DIR` variable selects a different prefix; `--prefix` / `-Prefix` takes precedence. `RUST_CACHE_BIN_DIR` or `--bin-dir` / `-BinDir` selects a separate wrapper directory. On Unix the external bin directory must be outside the managed prefix. For isolated tests, choose a dedicated prefix **and** bin directory. Installers never edit shell profiles, PATH settings, agent instructions, or Cargo configuration; a missing PATH entry produces a warning and full command paths. Release installation alone performs no agent skill registration; use a separately reviewed `agents setup` request.
+
+Unix system-wide installation requires the explicit `--system` option and existing root permissions; it defaults to `/usr/local/share/rust-cache-management` and `/usr/local/bin`. It never invokes sudo. Existing system paths and ancestors must be root-owned and have no group/world write permission; managed files are checked before root updates. No ownership or existing permission settings are changed. Admin-writable macOS `/usr/local` layouts may be refused; select an administrator-controlled root-owned location deliberately rather than weakening the guard. New system files are readable by other users and executable where needed; the validated mode record preserves that behavior on updates. System mode requires a 0.2.2-or-newer payload. System management requires root; diagnosis and help remain readable. An existing private user installation cannot be converted by changing its permissions. Ordinary user installs remain private.
+
+Unix installation requires curl, tar, and a SHA-256 utility; Windows uses PowerShell and system curl.exe and tar.exe. These are installation/update dependencies, not a Python runtime requirement.
 
 See [references/distribution.md](references/distribution.md) for updates, rollback, and trust limits. Updates activate new binary/skill payloads; upgrading the stable installer/manager itself requires reviewing a newer installer and installing it into a new prefix.
 
 ## Reuse the skill across agents
 
-Keep `SKILL.md`, `references/`, and `AGENTS-snippet.md` together. Run the installed manager's `status` command to find the activated release, and point your agent at its `SKILL.md`; alternatively copy the complete skill into that agent's documented skill location. Discovery and loading vary by tool. This package does not assume a universal agent directory.
+For an offline/manual fallback when the release command is unavailable, obtain and review a complete source/release copy and place its skill documents together in the selected agent’s documented skill directory after authorization. Preserve existing files and check for duplicate registrations first; this manual copy is not claimed as updater-managed. Keep `SKILL.md`, `references/`, and `AGENTS-snippet.md` together. Run the installed manager's `status` command to find the activated release, and point your agent at its `SKILL.md`; alternatively copy the complete skill into that agent's documented skill location. Discovery and loading vary by tool. This package does not assume a universal agent directory.
 
 For tools without skill discovery, explicitly ask the agent to read the actual installed `SKILL.md`. Add the short rule from `AGENTS-snippet.md` to the instruction file that tool reads, using the real skill path. Preserve existing instructions. Updates do not merge changes into agent-specific copies; update such copies deliberately after review.
 

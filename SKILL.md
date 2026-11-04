@@ -25,3 +25,7 @@ Read [references/defaults.md](references/defaults.md) for the nine recommended d
 6. Report observed space reclaimed and validation actually performed. Never describe `cargo check` as successful linking or test execution.
 
 If paths, ownership, permissions, tool behavior, or concurrency remain uncertain, leave artifacts untouched and report the blocker. Do not install cleanup tools automatically.
+
+## Installing this skill for an agent
+
+When the user explicitly asks to register this skill, read [references/distribution.md](references/distribution.md#agent-skill-setup) and use the packaged command's `agents detect` / `agents setup --dry-run` to preview selected agents, scope, paths and conflicts. Apply only the reviewed selection with explicit consent (`--yes` for noninteractive use). Preserve existing manual skills and configuration. Never grant project trust, edit provider settings, or install every detected agent by default. File registration is not proof of discovery or instruction adherence. This setup operation is separate from read-only cache diagnosis and grants no permission to delete cache artifacts.

@@ -32,7 +32,14 @@ jobs:
         run: cargo fmt --all -- --check
       - name: POSIX installer fixtures
         if: runner.os != 'Windows'
-        run: sh scripts/test-distribution.sh
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          cargo build --locked --release --target "$RELEASE_TARGET"
+          RCM_TEST_BINARY="$PWD/target/$RELEASE_TARGET/release/rust-cache-inspect" sh scripts/test-distribution.sh
+      - name: Live Unix latest source install and command wrappers
+        if: runner.os != 'Windows'
+        run: sh scripts/test-distribution-live.sh source
       - name: PowerShell parse check
         if: runner.os == 'Windows'
         shell: pwsh

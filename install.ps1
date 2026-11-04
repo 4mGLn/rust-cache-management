@@ -4,6 +4,7 @@ param(
     [string]$Action = 'Install',
     [string]$Repository = '4mGLn/rust-cache-management',
     [string]$Prefix,
+    [string]$BinDir,
     [string]$Version,
     [switch]$AutoUpdate,
     [string[]]$DiagnosticArguments = @()
@@ -64,6 +65,134 @@ function Verify-Manager {
         if ((Hash $path) -ne (Read-Plain ($path+'.sha256'))) { throw "Modified manager preserved; update refused: $name" }
     }
 }
+function New-Text([string]$Path,[string]$Text) {
+    $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes($Text+"`n")
+    $stream=[IO.File]::Open($Path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try { $stream.Write($bytes,0,$bytes.Length) } finally { $stream.Dispose() }
+}
+function Export-Text([string]$Name,[string]$Extension) {
+    if ($Extension -eq '.cmd') { return ('@powershell.exe -NoLogo -NoProfile -File "%~dp0'+$Name+'.ps1" %*') }
+    # Windows PowerShell 5 reads no-BOM scripts as ANSI. Keep exported code ASCII-only.
+    $target=Join-Path $Prefix ('bin/'+$Name+'.ps1')
+    $encoded=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target))
+    $q=[string][char]39
+    return ('$ErrorActionPreference='+$q+'Stop'+$q+"`n"+'$target=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('+$q+$encoded+$q+'))'+"`n"+'& $target @args'+"`n"+'exit $LASTEXITCODE')
+}
+function Text-Hash([string]$Text) {
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash((New-Object Text.UTF8Encoding($false)).GetBytes($Text)))).Replace('-','').ToLowerInvariant() } finally { $sha.Dispose() }
+}
+function Writable-DirectoryTarget([string]$Path) {
+    $candidate=$Path
+    while (-not (Test-Path -LiteralPath $candidate)) { $candidate=[IO.Directory]::GetParent($candidate).FullName }
+    Assert-PlainPath $candidate
+    if (-not (Test-Path -LiteralPath $candidate -PathType Container)) { throw 'Writable directory parent required' }
+    $probe=Join-Path $candidate ('.rcm-write-probe-'+[guid]::NewGuid().ToString('N'))
+    $created=$false
+    try { $stream=[IO.File]::Open($probe,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None); $created=$true; $stream.Dispose() }
+    catch { throw "Directory is not writable; no privilege changes attempted: $candidate" }
+    finally { if ($created) { [IO.File]::Delete($probe) } }
+}
+function Preflight-Exports {
+    Assert-PlainPath $BinDir
+    if ((Test-Path -LiteralPath $BinDir) -and -not (Test-Path -LiteralPath $BinDir -PathType Container)) { throw 'Bin directory is not a directory' }
+    if ([string]::Equals($BinDir,(Join-Path $Prefix 'bin'),[StringComparison]::OrdinalIgnoreCase)) { return }
+    if ([string]::Equals($BinDir,$Prefix,[StringComparison]::OrdinalIgnoreCase) -or $BinDir.StartsWith($Prefix+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'External BinDir must be outside managed prefix' }
+    Writable-DirectoryTarget $BinDir
+    foreach ($name in @('rust-cache-inspect','rust-cache-management')) {
+        foreach ($ext in @('.ps1','.cmd')) {
+            $file=Join-Path $BinDir ($name+$ext)
+            Assert-PlainPath $file
+            if (Test-Path -LiteralPath $file) {
+                if (-not (Test-Path -LiteralPath $file -PathType Leaf) -or (Hash $file) -cne (Text-Hash ((Export-Text $name $ext)+"`n"))) { throw "Unrelated or modified command preserved: $file" }
+            }
+        }
+    }
+}
+function Verify-BootstrapExtras {
+    $primary=@('bin/rust-cache-management.ps1','bin/rust-cache-management.cmd')
+    $any=$false
+    foreach ($name in $primary) {
+        foreach ($candidate in @($name,($name+'.sha256'))) {
+            $path=Join-Path $Prefix $candidate; Assert-PlainPath $path
+            if (Test-Path -LiteralPath $path) { $any=$true }
+        }
+    }
+    if ($any) {
+        foreach ($name in $primary) {
+            $path=Join-Path $Prefix $name
+            if ((Hash $path) -ne (Read-Plain ($path+'.sha256'))) { throw 'Modified or partial primary command preserved' }
+        }
+    }
+    $record=Join-Path $Prefix 'bin-directory'
+    Assert-PlainPath $record; Assert-PlainPath ($record+'.sha256')
+    if ((Test-Path -LiteralPath $record) -or (Test-Path -LiteralPath ($record+'.sha256'))) {
+        if ((Hash $record) -ne (Read-Plain ($record+'.sha256'))) { throw 'Modified or partial bin-directory record preserved' }
+    }
+}
+function Finish-Bootstrap {
+    if (-not $Bootstrap) { return }
+    Verify-BootstrapExtras
+    Preflight-Exports
+    $primaryPath=Join-Path $Prefix 'bin/rust-cache-management.ps1'
+    if (-not (Test-Path -LiteralPath $primaryPath)) {
+        $primary=@'
+$ErrorActionPreference='Stop'
+$root=Split-Path $PSScriptRoot -Parent
+$forward=@($args)
+if ($forward.Count -eq 0 -or $forward[0] -in @('--help','-h','help')) {
+    Write-Output 'rust-cache-management: diagnosis never authorizes cache deletion.'
+    Write-Output 'Usage: rust-cache-inspect --path DIRECTORY; rust-cache-management inspect --path DIRECTORY'
+    Write-Output 'Agents: rust-cache-management agents detect --json; agents setup --agent codex --scope user --dry-run --json'
+    Write-Output 'Management: rust-cache-management status|update|rollback|auto-on|auto-off'
+    Write-Output 'No arguments or help performs no update check. Use status to locate SKILL.md.'
+    exit 0
+}
+if ($forward[0] -eq 'agents') {
+    $pointer=Join-Path $root 'current'
+    if ([IO.File]::GetAttributes($pointer) -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked current pointer refused' }
+    $release=[IO.File]::ReadAllText($pointer).Trim()
+    if ($release -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+-x86_64-pc-windows-msvc$') { throw 'Invalid current pointer' }
+    foreach ($part in @('releases',"releases/$release","releases/$release/bin","releases/$release/bin/rust-cache-inspect.exe")) {
+        if ([IO.File]::GetAttributes((Join-Path $root $part)) -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked release path refused' }
+    }
+    & (Join-Path $root "releases/$release/bin/rust-cache-inspect.exe") @forward
+    exit $LASTEXITCODE
+}
+$actions=@{status='Status';update='Update';rollback='Rollback';'auto-on'='AutoOn';'auto-off'='AutoOff'}
+if ($actions.ContainsKey($forward[0])) {
+    if ($forward.Count -ne 1) { throw 'For advanced management options invoke manage.ps1 directly.' }
+    $global:LASTEXITCODE=0
+    $selectedAction=$actions[$forward[0]]
+    & (Join-Path $root 'manage.ps1') -Action $selectedAction
+    exit $LASTEXITCODE
+}
+if ($forward[0] -eq 'inspect') { $forward=@($forward | Select-Object -Skip 1) }
+& (Join-Path $root 'bin/rust-cache-inspect.ps1') @forward
+exit $LASTEXITCODE
+'@
+        New-Text $primaryPath $primary
+        New-Text (Join-Path $Prefix 'bin/rust-cache-management.cmd') '@powershell.exe -NoLogo -NoProfile -File "%~dp0rust-cache-management.ps1" %*'
+        foreach ($name in @('bin/rust-cache-management.ps1','bin/rust-cache-management.cmd')) { New-Text (Join-Path $Prefix ($name+'.sha256')) (Hash (Join-Path $Prefix $name)) }
+    }
+    if (-not [string]::Equals($BinDir,(Join-Path $Prefix 'bin'),[StringComparison]::OrdinalIgnoreCase)) {
+        $null=New-Item -ItemType Directory -Path $BinDir -Force
+        Assert-PlainPath $BinDir
+        foreach ($name in @('rust-cache-inspect','rust-cache-management')) {
+            foreach ($ext in @('.ps1','.cmd')) {
+                $path=Join-Path $BinDir ($name+$ext)
+                if (-not (Test-Path -LiteralPath $path)) { New-Text $path (Export-Text $name $ext) }
+            }
+        }
+    }
+    Write-Text (Join-Path $Stage 'bin-directory') $BinDir
+    Write-Text (Join-Path $Stage 'bin-directory.sha256') (Hash (Join-Path $Stage 'bin-directory'))
+    Move-Item -Force -LiteralPath (Join-Path $Stage 'bin-directory') -Destination (Join-Path $Prefix 'bin-directory')
+    Move-Item -Force -LiteralPath (Join-Path $Stage 'bin-directory.sha256') -Destination (Join-Path $Prefix 'bin-directory.sha256')
+    if ($AutoUpdate) { Write-Text (Join-Path $Prefix 'auto-update') 'enabled' }
+    Write-Output "Commands: $BinDir/rust-cache-inspect.cmd --path DIRECTORY; $BinDir/rust-cache-management.cmd --help"
+    if (-not (@($env:PATH -split ';' | Where-Object { $_.TrimEnd('\','/') -ieq $BinDir }).Count)) { Write-Warning 'Selected bin directory is not in PATH. Use the full commands above; no PATH or registry settings were changed.' }
+}
 function Activate([string]$Release) {
     if (Test-Path -LiteralPath (Join-Path $Prefix 'current')) {
         Write-Text (Join-Path $Stage 'previous') (Read-Pointer 'current')
@@ -76,6 +205,9 @@ function Download([string]$Uri,[string]$OutFile) {
     & curl.exe --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --retry 2 --connect-timeout 15 --max-time 180 --output $OutFile $Uri
     if ($LASTEXITCODE -ne 0) { throw 'HTTPS release download failed.' }
 }
+$Bootstrap=$Action -eq 'Install'
+$BinSelected=([bool]$BinDir -or [bool]$env:RUST_CACHE_BIN_DIR)
+if (-not $BinDir -and $env:RUST_CACHE_BIN_DIR) { $BinDir=$env:RUST_CACHE_BIN_DIR }
 $Target = 'x86_64-pc-windows-msvc'
 $script:Binary = 'rust-cache-inspect.exe'
 if ($env:OS -ne 'Windows_NT' -or $env:PROCESSOR_ARCHITECTURE -notin @('AMD64','x86') -or -not [Environment]::Is64BitOperatingSystem) { throw 'This installer supports Windows x86_64 only.' }
@@ -90,12 +222,26 @@ if ($Prefix -match '^[A-Za-z]:$') { throw 'Use a dedicated installation director
 if ($Version -and $Version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Version must be vN.N.N' }
 if ($Action -eq 'Install') {
     if ($Repository -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$') { throw 'Invalid repository; expected OWNER/REPO.' }
-    if (Test-Path -LiteralPath $Prefix) { throw 'Prefix exists; use its manager or choose a new prefix.' }
-    $null = New-Item -ItemType Directory -Path $Prefix
+    if (Test-Path -LiteralPath $Prefix) {
+        foreach ($name in @('repository','current','manage.ps1','manage.ps1.sha256','bin/rust-cache-inspect.ps1','bin/rust-cache-inspect.ps1.sha256','bin/rust-cache-inspect.cmd','bin/rust-cache-inspect.cmd.sha256')) { $null=Read-Plain (Join-Path $Prefix $name) }
+        if ((Read-Plain (Join-Path $Prefix 'repository')) -cne $Repository) { throw 'Existing prefix belongs to another repository; preserved.' }
+        $Action='Update'
+    }
 } else {
     $Repository=Read-Plain (Join-Path $Prefix 'repository')
     if ($Repository -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$') { throw 'Invalid repository record' }
 }
+if ($Bootstrap) {
+    if (Test-Path -LiteralPath $Prefix) {
+        Verify-BootstrapExtras
+        if (-not $BinSelected -and (Test-Path -LiteralPath (Join-Path $Prefix 'bin-directory'))) { $BinDir=Read-Plain (Join-Path $Prefix 'bin-directory') }
+    }
+    if (-not $BinDir) { $BinDir=Join-Path $Prefix 'bin' }
+    Assert-PlainPath $BinDir; $BinDir=[IO.Path]::GetFullPath($BinDir).TrimEnd('\','/')
+    Preflight-Exports
+}
+if ($Action -ne 'Run') { Writable-DirectoryTarget $Prefix }
+if ($Action -eq 'Install') { $null = New-Item -ItemType Directory -Path $Prefix }
 foreach ($name in @('releases','records','bin','current','previous','repository','auto-update','last-check','manage.ps1')) { Assert-PlainPath (Join-Path $Prefix $name) }
 if ($Action -eq 'Run') {
     if (Test-Path -LiteralPath (Join-Path $Prefix 'auto-update')) {
@@ -125,7 +271,7 @@ $null=New-Item -ItemType Directory -Path $lock -ErrorAction Stop
 $Stage=Join-Path $Prefix ('.stage-'+[guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $Stage
 try {
-    if ($Action -ne 'Install') { Verify-Manager; $current=Read-Pointer 'current'; Verify-Release $current }
+    if ($Action -ne 'Install') { Verify-Manager; Verify-BootstrapExtras; $current=Read-Pointer 'current'; Verify-Release $current }
     switch ($Action) {
         'Status' { Write-Output "Repository: $Repository`nCurrent release: $current`nSkill: $Prefix/releases/$current/SKILL.md"; Write-Output ('Auto update: '+(Test-Path -LiteralPath (Join-Path $Prefix 'auto-update'))); return }
         'AutoOn' { Write-Text (Join-Path $Stage 'auto-update') 'enabled'; Move-Item -Force -LiteralPath (Join-Path $Stage 'auto-update') -Destination (Join-Path $Prefix 'auto-update'); Write-Output 'Enabled: launcher checks at most daily; no service or scheduled task.'; return }
@@ -145,7 +291,7 @@ try {
     $release="$Version-$Target"
     if ($Action -eq 'Update') {
         $oldVersion=$current.Substring(1,$current.Length-$Target.Length-2)
-        if ([version]$Version.Substring(1) -eq [version]$oldVersion) { Write-Output "Already at $Version"; return }
+        if ([version]$Version.Substring(1) -eq [version]$oldVersion) { Write-Output "Already at $Version"; Finish-Bootstrap; return }
         if ([version]$Version.Substring(1) -lt [version]$oldVersion) { throw 'Update must advance version; use rollback for a retained release.' }
     }
     $releaseDir=Join-Path $Prefix "releases/$release"
@@ -154,6 +300,7 @@ try {
         Verify-Release $release
         Activate $release
         Write-Output "Activated verified retained release $release"
+        Finish-Bootstrap
         return
     }
     $asset="rust-cache-management-$Version-$Target.tar.gz"
@@ -204,6 +351,7 @@ exit $LASTEXITCODE
         Write-Text (Join-Path $Prefix 'repository') $Repository
     }
     Activate $release
+    Finish-Bootstrap
     if ($AutoUpdate) { Write-Text (Join-Path $Prefix 'auto-update') 'enabled' }
     Write-Output "Installed $release`nLauncher: $Prefix/bin/rust-cache-inspect.cmd`nSkill: $releaseDir/SKILL.md"
 } finally {

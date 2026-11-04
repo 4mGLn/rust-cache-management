@@ -2,6 +2,8 @@
 
 Reviewed against official primary sources on **2026-11-04**. Recheck support with the installed Cargo version. These are decision defaults, not permission to modify configuration. Explicit project settings and required validation take precedence. Distinguish **Cargo defaults**, **upstream tuning advice**, and **this skill's conservative recommendations**.
 
+Agent registration and updates are separate from Cargo defaults. Only an explicit reviewed setup request may write skill files; it never authorizes cache cleanup or Cargo configuration changes. See [distribution.md](distribution.md#agent-skill-setup) on demand.
+
 ## 1. Incremental compilation
 
 **Default:** preserve effective settings. For an otherwise unconfigured local development workspace, retain Cargo's `dev` incremental setting (`true`); `test` inherits `dev`. Release defaults to `false` and must not be changed merely for cache management.
