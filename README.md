@@ -1,6 +1,6 @@
 # rust-cache-management
 
-Version **0.2.0**, release preparation **2026-11-04**.
+Version **0.2.1**, updated **2026-11-04**.
 
 [Repository](https://github.com/4mGLn/rust-cache-management) · [Releases](https://github.com/4mGLn/rust-cache-management/releases)
 
@@ -22,26 +22,37 @@ The helper does not resolve effective Cargo settings, shared users, active build
 
 ## Install a release
 
-Release targets are Linux x86_64 and ARM64, macOS Intel and Apple Silicon, and Windows x86_64. Installers reject unsupported platforms. The pinned commands below require the `v0.2.0` release assets to be published; release preparation alone does not establish that downloads or native CI have succeeded.
+Release targets are Linux x86_64 and ARM64, macOS Intel and Apple Silicon, and Windows x86_64. Installers reject unsupported platforms. Ordinary installation resolves the latest published stable release automatically; no version argument is needed.
 
-The default repository is [4mGLn/rust-cache-management](https://github.com/4mGLn/rust-cache-management). Download and review the pinned installer, then run it:
+Unix (Linux/macOS):
 
 ```sh
-curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/4mGLn/rust-cache-management/v0.2.0/install.sh -o install.sh
-sh install.sh --version v0.2.0
+curl -fsSL https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-Invoke-WebRequest 'https://raw.githubusercontent.com/4mGLn/rust-cache-management/v0.2.0/install.ps1' -OutFile install.ps1
-& ./install.ps1 -Version v0.2.0
+irm https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.ps1 | iex
 ```
 
-For an explicitly selected alternative repository, pass `--repo owner/repository` on Unix or `-Repository owner/repository` on Windows. The selected repository is recorded for subsequent updates. Downloading and running an installer trusts that repository and HTTPS transport; review the trust limits below.
+These commands immediately execute remote code. They trust the repository, its maintainers and release workflow, and HTTPS transport. A compromised installer can act before its own checksum checks run. For review before execution, download the latest installer and inspect it, then run it without a version argument:
 
-Unix defaults to `$HOME/.local/share/rust-cache-management`; Windows defaults to `$env:LOCALAPPDATA\rust-cache-management`. Override with `--prefix` or `-Prefix`. No installer automatically edits PATH, agent instructions, or Cargo configuration. Use the launcher path printed by installation, or add that directory to your own PATH. Unix installation requires curl, tar, and a SHA-256 utility; Windows uses PowerShell and the system curl.exe and tar.exe. These are installation/update dependencies, not a Python runtime requirement.
+```sh
+curl -fSL https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.sh -o install.sh
+# Read install.sh before the next command.
+sh install.sh
+```
+
+```powershell
+Invoke-WebRequest 'https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.ps1' -OutFile install.ps1
+# Read install.ps1 before the next command.
+& ./install.ps1
+```
+
+If GitHub cannot resolve latest, returns an invalid version or an unexpected redirect, installation stops without activating a payload. For advanced reproducibility, `--version v0.2.1` / `-Version v0.2.1` selects a published version explicitly; use its matching reviewed installer too. An alternate repository can be selected with `--repo owner/repository` / `-Repository owner/repository` and is recorded for later updates.
+
+Unix defaults to `$HOME/.local/share/rust-cache-management`; Windows defaults to `$env:LOCALAPPDATA\rust-cache-management`. Set the process environment variable `RUST_CACHE_INSTALL_DIR` for a different installation directory, including when using the one-line commands. Explicit `--prefix` / `-Prefix` takes precedence. Managed commands use their existing installation root. Existing prefixes are refused and locally modified payloads are preserved rather than overwritten. No installer automatically edits PATH, agent instructions, or Cargo configuration. Use the launcher path printed by installation, or add that directory to your own PATH. Unix installation requires curl, tar, and a SHA-256 utility; Windows uses PowerShell and the system curl.exe and tar.exe. These are installation/update dependencies, not a Python runtime requirement.
 
 See [references/distribution.md](references/distribution.md) for updates, rollback, and trust limits. Updates activate new binary/skill payloads; upgrading the stable installer/manager itself requires reviewing a newer installer and installing it into a new prefix.
 
@@ -75,4 +86,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for signed commit requirements and [CHANG
 
 Copyright (c) 2026 4mGLn. Project code, installers, and skill documentation are available under the [MIT License](LICENSE). Third-party components retain their own licenses and copyright notices; [THIRD-PARTY-NOTICES](THIRD-PARTY-NOTICES) includes the locked dependency texts, the additional Unicode data notice, and the Rust 1.97.1 standard-library runtime notices. Preserve both files when distributing release binaries. Review the runtime notice snapshot when changing the compiler or release targets.
 
-한국어 요약: Python 없이 실행하는 Rust 진단 도구와 여러 에이전트가 읽을 수 있는 skill입니다. 설치와 업데이트는 캐시를 삭제하거나 Cargo 설정을 바꾸지 않습니다. 자동 업데이트는 기본적으로 꺼져 있으며, 켠 경우의 동작과 복구 방법은 배포 문서에 명시합니다. 기본 저장소는 `4mGLn/rust-cache-management`이며, 고정 설치 명령은 `v0.2.0` 공개 릴리스 게시 후 사용할 수 있습니다.
+한국어 요약: Python 없이 실행하는 Rust 진단 도구와 여러 에이전트가 읽을 수 있는 skill입니다. 설치와 업데이트는 캐시를 삭제하거나 Cargo 설정을 바꾸지 않습니다. 자동 업데이트는 기본적으로 꺼져 있으며, 켠 경우의 동작과 복구 방법은 배포 문서에 명시합니다. 기본 저장소는 `4mGLn/rust-cache-management`이며 일반 설치는 버전 인자 없이 최신 공개 릴리스를 선택합니다. 한 줄 설치는 원격 코드를 즉시 실행하므로, 필요하면 먼저 내려받아 검토한 후 실행하세요.

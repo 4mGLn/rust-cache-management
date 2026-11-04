@@ -80,7 +80,8 @@ $Target = 'x86_64-pc-windows-msvc'
 $script:Binary = 'rust-cache-inspect.exe'
 if ($env:OS -ne 'Windows_NT' -or $env:PROCESSOR_ARCHITECTURE -notin @('AMD64','x86') -or -not [Environment]::Is64BitOperatingSystem) { throw 'This installer supports Windows x86_64 only.' }
 if (-not $Prefix) {
-    if ([IO.Path]::GetFileName($PSCommandPath) -eq 'manage.ps1') { $Prefix=$PSScriptRoot }
+    if ($PSCommandPath -and ([IO.Path]::GetFileName($PSCommandPath) -eq 'manage.ps1')) { $Prefix=$PSScriptRoot }
+    elseif ($env:RUST_CACHE_INSTALL_DIR) { $Prefix=$env:RUST_CACHE_INSTALL_DIR }
     else { $Prefix=Join-Path $env:LOCALAPPDATA 'rust-cache-management' }
 }
 Assert-PlainPath $Prefix
@@ -136,8 +137,10 @@ try {
     if (-not $Version) {
         $uri=& curl.exe --fail --silent --show-error --head --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 --output NUL --write-out '%{url_effective}' "https://github.com/$Repository/releases/latest"
         if ($LASTEXITCODE -ne 0) { throw 'Latest stable release lookup failed.' }
-        $Version=([string]$uri).TrimEnd('/').Split('/')[-1]
+        $Version=([string]$uri).Split('/')[-1]
         if ($Version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Latest stable release could not be resolved.' }
+        $expectedLatest="https://github.com/$Repository/releases/tag/$Version"
+        if (-not [string]::Equals([string]$uri,$expectedLatest,[StringComparison]::OrdinalIgnoreCase)) { throw 'Latest release redirect was unexpected or ambiguous.' }
     }
     $release="$Version-$Target"
     if ($Action -eq 'Update') {

@@ -6,6 +6,9 @@ $root=Split-Path $PSScriptRoot -Parent
 $temp=Join-Path ([IO.Path]::GetTempPath()) ('rcm-test-'+[guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $temp
 $global:FixtureAssets=Join-Path $temp 'assets'
+$global:FixtureLatestMode='valid'
+$global:FixtureLatestVersion='v0.2.0'
+$previousInstallDir=$env:RUST_CACHE_INSTALL_DIR
 function global:curl.exe {
     $out=$null; $uri=$null; $head=$false
     for ($i=0;$i -lt $args.Count;$i++) {
@@ -18,9 +21,18 @@ function global:curl.exe {
             default { throw 'Unexpected mock download argument' }
         }
     }
-    if ($uri -notlike 'https://github.com/fixture/cache/releases/*') { throw 'Fixture refused unexpected network target' }
-    if ($head) { $global:LASTEXITCODE=0; return 'https://github.com/fixture/cache/releases/tag/v0.3.0' }
-    $relative=$uri.Substring('https://github.com/fixture/cache/releases/download/'.Length)
+    if ($uri -notlike 'https://github.com/fixture/cache/releases/*' -and $uri -notlike 'https://github.com/4mGLn/rust-cache-management/releases/*') { throw 'Fixture refused unexpected network target' }
+    if ($head) {
+        $global:LASTEXITCODE=0
+        switch ($global:FixtureLatestMode) {
+            'http-error' { $global:LASTEXITCODE=22; return }
+            'invalid' { return 'https://github.com/fixture/cache/releases/tag/not-a-version' }
+            'ambiguous' { return 'https://example.invalid/fixture/cache/releases/tag/v0.2.0' }
+            'multiple' { return @('https://github.com/fixture/cache/releases/tag/v0.2.0','https://github.com/fixture/cache/releases/tag/v0.2.0') }
+            default { return ($uri.Substring(0,$uri.Length-'/latest'.Length)+'/tag/'+$global:FixtureLatestVersion) }
+        }
+    }
+    $relative=$uri -replace '^https://github.com/(fixture/cache|4mGLn/rust-cache-management)/releases/download/',''
     Copy-Item -LiteralPath (Join-Path $global:FixtureAssets $relative) -Destination $out
     $global:LASTEXITCODE=0
 }
@@ -31,6 +43,21 @@ try {
         $lines=@(Get-ChildItem -LiteralPath $dest -Filter '*.sha256' | ForEach-Object { [IO.File]::ReadAllText($_.FullName).Trim() })
         [IO.File]::WriteAllText((Join-Path $dest 'SHA256SUMS'),($lines -join "`n")+"`n",(New-Object Text.UTF8Encoding($false)))
     }
+    # Exercise the common IEX path without Version and only an application-specific temp prefix.
+    $env:RUST_CACHE_INSTALL_DIR=Join-Path $temp 'latest iex install'
+    Invoke-Expression ([IO.File]::ReadAllText((Join-Path $root 'install.ps1')))
+    if ((Get-Content -Raw -LiteralPath (Join-Path $env:RUST_CACHE_INSTALL_DIR 'current')).Trim() -cne 'v0.2.0-x86_64-pc-windows-msvc') { throw 'IEX default latest activation failed' }
+    $explicit=Join-Path $temp 'explicit-prefix'
+    & (Join-Path $root 'install.ps1') -Prefix $explicit | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $explicit 'current'))) { throw 'Explicit Prefix did not override application environment' }
+    $env:RUST_CACHE_INSTALL_DIR=$previousInstallDir
+    foreach ($mode in @('http-error','invalid','ambiguous','multiple')) {
+        $global:FixtureLatestMode=$mode
+        $refused=$false; $failurePrefix=Join-Path $temp ('latest-'+$mode)
+        try { & (Join-Path $root 'install.ps1') -Prefix $failurePrefix | Out-Null } catch { $refused=$true }
+        if (-not $refused -or (Test-Path -LiteralPath $failurePrefix)) { throw "Latest resolution did not fail closed: $mode" }
+    }
+    $global:FixtureLatestMode='valid'
     $prefix=Join-Path $temp 'install with spaces'
     & (Join-Path $root 'install.ps1') -Repository fixture/cache -Prefix $prefix -Version v0.2.0 | Out-Null
     if (Test-Path -LiteralPath (Join-Path $prefix 'auto-update')) { throw 'Automatic update unexpectedly enabled' }
@@ -57,4 +84,7 @@ try {
     Remove-Item -LiteralPath $temp -Recurse -Force
     Remove-Item Function:\curl.exe
     Remove-Variable FixtureAssets -Scope Global
+    Remove-Variable FixtureLatestMode -Scope Global
+    Remove-Variable FixtureLatestVersion -Scope Global
+    $env:RUST_CACHE_INSTALL_DIR=$previousInstallDir
 }

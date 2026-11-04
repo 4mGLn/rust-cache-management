@@ -32,7 +32,16 @@ while [ "$#" -gt 0 ]; do
 done
 printf '%s\n' "$url" >> "$FIXTURE_LOG"
 case "$url" in https://github.com/fixture/cache/releases/*|https://github.com/4mGLn/rust-cache-management/releases/*) ;; *) exit 91;; esac
-if [ "$head" = true ]; then printf 'https://github.com/fixture/cache/releases/tag/%s' "${FIXTURE_LATEST:-v0.2.0}"; exit 0; fi
+if [ "$head" = true ]; then
+ case "${FIXTURE_LATEST_MODE:-valid}" in
+  http-error) exit 22;;
+  invalid) printf 'https://github.com/fixture/cache/releases/tag/not-a-version';;
+  ambiguous) printf 'https://example.invalid/fixture/cache/releases/tag/v0.2.0';;
+  multiple) printf 'https://github.com/fixture/cache/releases/tag/v0.2.0\nhttps://github.com/fixture/cache/releases/tag/v0.2.0';;
+  *) printf '%s/tag/%s' "${url%/latest}" "${FIXTURE_LATEST:-v0.2.0}";;
+ esac
+ exit 0
+fi
 case "$url" in
  https://github.com/fixture/cache/*) relative=${url#https://github.com/fixture/cache/releases/download/};;
  *) relative=${url#https://github.com/4mGLn/rust-cache-management/releases/download/};;
@@ -44,6 +53,20 @@ chmod +x "$temp/mock/curl"
 export PATH="$temp/mock:$PATH" FIXTURE_ASSETS="$temp/assets" FIXTURE_LOG="$temp/network.log"
 sh "$root/install.sh" --prefix "$temp/default-repository" --version v0.2.0 >/dev/null
 [ "$(cat "$temp/default-repository/repository")" = 4mGLn/rust-cache-management ]
+# Common pipeline and default latest mode: no version argument and no actual user prefix.
+export RUST_CACHE_INSTALL_DIR="$temp/latest-pipeline"
+cat "$root/install.sh" | sh >/dev/null
+[ "$(cat "$temp/latest-pipeline/current")" = "v0.2.0-$target" ]
+[ "$(cat "$temp/latest-pipeline/repository")" = 4mGLn/rust-cache-management ]
+# Explicit prefix overrides the process-only application setting.
+sh "$root/install.sh" --prefix "$temp/explicit-prefix" >/dev/null
+[ -f "$temp/explicit-prefix/current" ]
+unset RUST_CACHE_INSTALL_DIR
+for mode in http-error invalid ambiguous multiple; do
+ if FIXTURE_LATEST_MODE="$mode" sh "$root/install.sh" --prefix "$temp/latest-$mode" 2>/dev/null; then exit 1; fi
+ [ ! -e "$temp/latest-$mode/current" ]
+ [ ! -e "$temp/latest-$mode" ]
+done
 prefix=$temp/install
 sh "$root/install.sh" --repo fixture/cache --prefix "$prefix" --version v0.2.0 >/dev/null
 [ ! -e "$prefix/auto-update" ]

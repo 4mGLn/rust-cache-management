@@ -135,7 +135,7 @@ fn cli_rejects_invalid_or_missing_arguments() {
     assert!(version.status.success());
     assert_eq!(
         String::from_utf8(version.stdout).unwrap().trim(),
-        "rust-cache-inspect 0.2.0"
+        format!("rust-cache-inspect {}", env!("CARGO_PKG_VERSION"))
     );
 }
 

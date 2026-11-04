@@ -37,7 +37,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          foreach ($file in @('install.ps1','scripts/package.ps1','scripts/test-distribution.ps1')) {
+          foreach ($file in @('install.ps1','scripts/package.ps1','scripts/test-distribution.ps1','scripts/test-distribution-live.ps1')) {
             $tokens=$null; $errors=$null
             [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file),[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw ($errors -join "`n") }
@@ -49,4 +49,10 @@ jobs:
           cargo build --locked --release --target ${{ matrix.target }}
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ./scripts/test-distribution.ps1 -Binary target/${{ matrix.target }}/release/rust-cache-inspect.exe
-          ./scripts/package.ps1 -Version v0.2.0 -Binary target/${{ matrix.target }}/release/rust-cache-inspect.exe
+          $packageVersion='v'+((cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version)
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ./scripts/package.ps1 -Version $packageVersion -Binary target/${{ matrix.target }}/release/rust-cache-inspect.exe
+      - name: Live Windows latest install from source without Version
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-distribution-live.ps1 -Mode Source

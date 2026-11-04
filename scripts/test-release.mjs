@@ -1,13 +1,15 @@
 // Offline regression checks for signature gating and no-clobber release publication.
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 const verify = pathToFileURL(resolve('scripts/verify-release.mjs')).href;
 const publish = pathToFileURL(resolve('scripts/publish-release.mjs')).href;
+const cargoVersion = readFileSync('Cargo.toml', 'utf8').match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+if (!/^\d+\.\d+\.\d+$/.test(cargoVersion ?? '')) throw new Error('Invalid Cargo package version');
 const temp = mkdtempSync(join(tmpdir(), 'rcm-release-test-'));
-const env = { ...process.env, GITHUB_REPOSITORY: 'fixture/cache', GITHUB_REF_NAME: 'v0.2.0', GITHUB_TOKEN: 'offline-test-token' };
+const env = { ...process.env, GITHUB_REPOSITORY: 'fixture/cache', GITHUB_REF_NAME: `v${cargoVersion}`, GITHUB_TOKEN: 'offline-test-token' };
 function test(name, module, setup, pass, cwd = process.cwd()) {
   const r = spawnSync(process.execPath, ['--input-type=module', '-e', setup + `\nawait import(${JSON.stringify(module)});`], { cwd, env, encoding: 'utf8' });
   if ((r.status === 0) !== pass) throw new Error(`${name} failed: ${r.stderr}`);
@@ -39,7 +41,7 @@ globalThis.fetch=async (url,opts={}) => {
  url=String(url); let data={}; let status=200;
  if(url.includes('/releases?')) {
    if(DRAFT && url.endsWith('page=1')) data=Array.from({length:100},(_,i)=>({tag_name:'v0.0.'+i}));
-   else data=DRAFT?[{tag_name:'v0.2.0',draft:true}]:[];
+   else data=DRAFT?[{tag_name:process.env.GITHUB_REF_NAME,draft:true}]:[];
  } else if(url.endsWith('/releases') && opts.method==='POST') {
    posts++; if(!JSON.parse(opts.body).draft) throw Error('Release must begin as draft');
    data={id:123,upload_url:'https://uploads.github.com/repos/fixture/cache/releases/123/assets{?name,label}'};

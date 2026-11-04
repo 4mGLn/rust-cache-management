@@ -6,7 +6,8 @@ fail() { printf '%s\n' "rust-cache-management: $*" >&2; exit 1; }
 usage() {
   cat <<'EOF'
 Usage: sh install.sh [--repo OWNER/REPO] [--prefix ABSOLUTE_PATH] [--version vN.N.N] [--auto-update]
-Default repository: 4mGLn/rust-cache-management
+Default repository: 4mGLn/rust-cache-management; omitted --version selects latest stable release.
+RUST_CACHE_INSTALL_DIR sets the initial prefix; --prefix takes precedence.
 Installed manager: sh PREFIX/manage.sh update|rollback|auto-on|auto-off|status
 Automatic updates are OFF by default. Enabling checks on launcher invocation, at most daily.
 No service, cron job, agent configuration, Cargo cache, or shell profile is changed.
@@ -80,7 +81,7 @@ activate() {
   mv "$stage/current" "$prefix/current"
 }
 action=install; repo=4mGLn/rust-cache-management; version=; auto=false
-prefix=${HOME:?HOME is required}/.local/share/rust-cache-management
+prefix=${RUST_CACHE_INSTALL_DIR:-${HOME:?HOME is required}/.local/share/rust-cache-management}
 case "${0##*/}" in manage.sh) prefix=$(CDPATH='' cd -- "$(dirname "$0")" && pwd -P); action=${1:-status}; [ "$#" -eq 0 ] || shift;; esac
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -129,6 +130,8 @@ command -v tar >/dev/null 2>&1 || fail 'tar is required'
 if [ -z "$version" ]; then
   latest=$(curl --fail --silent --show-error --head --location --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 --output /dev/null --write-out '%{url_effective}' "https://github.com/$repo/releases/latest")
   version=${latest##*/}; valid_version "$version" || fail 'latest stable release could not be resolved'
+  expected_latest=https://github.com/$repo/releases/tag/$version
+  [ "$(printf '%s' "$latest" | LC_ALL=C tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$expected_latest" | LC_ALL=C tr '[:upper:]' '[:lower:]')" ] || fail 'latest release redirect was unexpected or ambiguous'
 fi
 release=$version-$target
 if [ "$action" = update ]; then

@@ -57,7 +57,7 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_TARGET: ${{ matrix.target }}
         run: |
-          foreach ($file in @('install.ps1','scripts/package.ps1','scripts/test-distribution.ps1')) {
+          foreach ($file in @('install.ps1','scripts/package.ps1','scripts/test-distribution.ps1','scripts/test-distribution-live.ps1')) {
             $tokens=$null; $errors=$null
             [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $file),[ref]$tokens,[ref]$errors)
             if ($errors.Count) { throw ($errors -join "`n") }
@@ -92,3 +92,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/publish-release.mjs
+  verify-live-install:
+    needs: publish
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: {persist-credentials: false}
+      - name: Published latest one-line install and actual diagnostic on Linux
+        if: runner.os == 'Linux'
+        env:
+          EXPECTED_RELEASE: ${{ github.ref_name }}
+        run: sh scripts/test-distribution-live.sh published "$EXPECTED_RELEASE"
+      - name: Published latest IEX install and actual diagnostic on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          EXPECTED_RELEASE: ${{ github.ref_name }}
+        run: ./scripts/test-distribution-live.ps1 -Mode Published -ExpectedVersion $env:EXPECTED_RELEASE

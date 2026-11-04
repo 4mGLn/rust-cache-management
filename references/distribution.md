@@ -2,26 +2,39 @@
 
 Installers default to [4mGLn/rust-cache-management](https://github.com/4mGLn/rust-cache-management) and download its GitHub release assets. Override deliberately with `--repo owner/repository` or `-Repository owner/repository`; the selected repository is retained for updates. There is no telemetry, hidden service, or scheduled task. Installation never edits project instructions, Cargo settings, or caches.
 
-## Pinned installation
+## Latest installation
 
-After the `v0.2.0` release assets are published, download and review the tagged installer, then run it:
+The ordinary commands select the latest published stable release automatically, without version arguments:
 
 ```sh
-curl --fail --show-error --location --proto '=https' --proto-redir '=https' \
-  https://raw.githubusercontent.com/4mGLn/rust-cache-management/v0.2.0/install.sh -o install.sh
-sh install.sh --version v0.2.0
+curl -fsSL https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.sh | sh
 ```
 
 ```powershell
-Invoke-WebRequest 'https://raw.githubusercontent.com/4mGLn/rust-cache-management/v0.2.0/install.ps1' -OutFile install.ps1
-& ./install.ps1 -Version v0.2.0
+irm https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.ps1 | iex
 ```
 
-See the [repository](https://github.com/4mGLn/rust-cache-management) and [release list](https://github.com/4mGLn/rust-cache-management/releases) for publication status. These commands do not imply that the prepared release or native CI has already completed.
+These commands execute remote code immediately and trust the repository, maintainers, release workflow and HTTPS transport. They do not independently authenticate a publisher. Reviewable alternatives download the same latest script first, let you inspect it, and then run without version arguments:
+
+```sh
+curl -fSL https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.sh -o install.sh
+# Inspect install.sh, then:
+sh install.sh
+```
+
+```powershell
+Invoke-WebRequest 'https://github.com/4mGLn/rust-cache-management/releases/latest/download/install.ps1' -OutFile install.ps1
+# Inspect install.ps1, then:
+& ./install.ps1
+```
+
+A missing latest release, an HTTP lookup failure, an invalid version or an unexpected/ambiguous redirect stops activation. The final lookup redirect must identify the selected repository's HTTPS GitHub release tag. Advanced reproducibility can use an explicitly reviewed matching-version installer and `--version v0.2.1` / `-Version v0.2.1`; this is optional, not the default installation path.
+
+See the [repository](https://github.com/4mGLn/rust-cache-management) and [release list](https://github.com/4mGLn/rust-cache-management/releases) for publication status. A configured post-publication check is not evidence until it completes.
 
 ## Layout and commands
 
-Unix installation defaults to `$HOME/.local/share/rust-cache-management`; use `--prefix /absolute/path` to override. Windows defaults to `$env:LOCALAPPDATA\rust-cache-management`; use `-Prefix` to override. The prefix is dedicated to this tool. Do not select a shared directory containing unrelated files.
+Unix installation defaults to `$HOME/.local/share/rust-cache-management`; Windows defaults to `$env:LOCALAPPDATA\rust-cache-management`. The process-only application variable `RUST_CACHE_INSTALL_DIR` overrides this initial destination, so the one-line commands can install into an explicit private test or user directory. `--prefix /absolute/path` / `-Prefix` takes precedence over that variable. Managers always use their own existing prefix. No HOME/LOCALAPPDATA or persistent environment settings are changed. The prefix is dedicated to this tool. Do not select a shared directory containing unrelated files.
 
 Windows prefixes must be local drive-qualified paths such as `C:\Users\name\AppData\Local\rust-cache-management`; drive-relative and UNC prefixes are unsupported. Existing linked/reparse paths are rejected. Windows security policy may block unsigned PowerShell scripts or executables; installers do not alter execution policy or bypass OS controls.
 

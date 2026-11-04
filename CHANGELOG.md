@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 — 2026-11-04
+
+- Make the primary Unix and Windows one-line commands resolve the latest stable release without version arguments; retain optional explicit version selection.
+- Add process-only `RUST_CACHE_INSTALL_DIR` installation destinations, with explicit prefix options taking precedence and installed managers retaining their own root.
+- Reject invalid or ambiguous latest-release redirects and add HTTP/latest-resolution failure fixtures.
+- Exercise actual no-version Windows installation from the new source in CI and published latest Unix pipeline/Windows IEX installation after release, with temporary prefixes and read-only diagnostics.
+
+Native CI and post-publication checks for 0.2.1 must be reported from their actual run results.
+
 ## 0.2.0 — 2026-11-04
 
 - Replace the optional Python helper with a standalone Rust diagnostic executable for explicitly supplied cache paths.
