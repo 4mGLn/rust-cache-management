@@ -181,7 +181,15 @@ try {
     console.error('Agent setup fixture stage: management wrapper preview');
     const preview=runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject,'--dry-run']);
     assert.equal(preview.status,'planned');
-    assert(preview.actions[0].target.endsWith(join("wrapper project ' unicode 한글",'.agents','skills','rust-cache-management')),'Wrapper JSON target lost Unicode/path arguments');
+    const actualTarget=preview.actions[0].target;
+    const expectedTarget=join(wrappedProject,'.agents','skills','rust-cache-management');
+    const expectedSuffix=join("wrapper project ' unicode 한글",'.agents','skills','rust-cache-management');
+    const targetEvidence=JSON.stringify({actual:actualTarget,expected:expectedTarget}).replace(/[\u0080-\uffff]/g,c=>'\\u'+c.charCodeAt(0).toString(16).padStart(4,'0'));
+    console.error('Wrapper target comparison:',targetEvidence);
+    // Windows PathBuf may preserve '/' inside a joined component. Normalize only
+    // separators; all Unicode and apostrophe characters in the selected suffix remain exact.
+    const separators=path=>process.platform==='win32'?path.replaceAll('\\','/'):path;
+    assert(separators(actualTarget).endsWith(separators(expectedSuffix)),'Wrapper JSON target lost Unicode/path arguments: '+targetEvidence);
     console.error('Agent setup fixture stage: management wrapper missing consent');
     assert.equal(runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject],4).status,'consent_required');
     assert.equal(runWrapped(wrappedHome,['setup','--agent','','--scope','user','--dry-run'],2).status,'invalid','Empty selector must fail without writes');
