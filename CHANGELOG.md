@@ -2,6 +2,7 @@
 
 ## 0.2.2 — 2026-11-04
 
+- Keep Windows archive/download native arguments relative to a Unicode-safe working directory; isolate POSIX fixture overrides and retain bounded failure diagnostics for shell portability verification.
 - Add explicit agent discovery/setup with user/project preview, consent, structured results, conflict preservation and repeatable managed registration; keep ordinary disk diagnosis read-only. Add isolated native-CI fixtures for packaged setup, compatible shared registration, manual/duplicate handling and wrapper consent/auto-check bypass.
 - Forward management `agents ...` directly to the activated binary without rewriting legacy bootstraps or changing the fixed payload schema; document agent/version/alias and project-trust limits.
 - Make repeat installation safely validate/reuse or update an intact managed prefix, including legacy 0.2.0 prefixes, while preserving original bootstrap code and user modifications.

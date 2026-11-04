@@ -10,6 +10,7 @@ $global:FixtureLatestMode='valid'
 $global:FixtureLatestVersion='v0.2.0'
 $previousInstallDir=$env:RUST_CACHE_INSTALL_DIR
 $previousBinDir=$env:RUST_CACHE_BIN_DIR
+$originalLocation=(Get-Location).Path
 function global:curl.exe {
     $out=$null; $uri=$null; $head=$false
     for ($i=0;$i -lt $args.Count;$i++) {
@@ -68,6 +69,7 @@ try {
     $prefix=Join-Path $temp ("install space's "+$unicodeSuffix)
     $env:RUST_CACHE_BIN_DIR=Join-Path $temp ("command space's "+$unicodeSuffix)
     & (Join-Path $root 'install.ps1') -Repository fixture/cache -Prefix $prefix -Version v0.2.0 | Out-Null
+    if ((Get-Location).Path -cne $originalLocation) { throw 'Installer changed caller location' }
     if (Test-Path -LiteralPath (Join-Path $prefix 'auto-update')) { throw 'Automatic update unexpectedly enabled' }
     $managerHash=(Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $prefix 'manage.ps1')).Hash
     & (Join-Path $root 'install.ps1') -Repository fixture/cache -Prefix $prefix -Version v0.2.0 | Out-Null

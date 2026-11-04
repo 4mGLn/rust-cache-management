@@ -1,10 +1,28 @@
 #!/bin/sh
 # Offline fixture tests: mock curl maps only known HTTPS release requests to local bytes.
+# Subshell fixture overrides intentionally do not propagate; later globals are explicitly exported.
+# shellcheck disable=SC2030,SC2031
 set -eu
 root=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd -P)
 temp=$(mktemp -d)
 temp=$(CDPATH='' cd -- "$temp" && pwd -P)
-trap 'rm -rf "$temp"' EXIT HUP INT TERM
+finish_fixture() {
+ fixture_exit=$?
+ if [ "$fixture_exit" -ne 0 ]; then
+  printf 'Distribution fixture failed (exit %s); bounded mock diagnostics follow.\n' "$fixture_exit" >&2
+  for fixture_log in "$temp/network.log" "$temp/installer-messages.log"; do
+   if [ -f "$fixture_log" ] && [ ! -L "$fixture_log" ]; then
+    printf 'Fixture log: %s\n' "${fixture_log##*/}" >&2
+    tail -n 80 "$fixture_log" >&2 || :
+   fi
+  done
+ fi
+ rm -rf "$temp"
+ trap - EXIT HUP INT TERM
+ exit "$fixture_exit"
+}
+trap finish_fixture EXIT
+trap 'exit 1' HUP INT TERM
 mkdir -p "$temp/mock" "$temp/assets/v0.2.0" "$temp/assets/v0.3.0"
 cat > "$temp/helper" <<'EOF'
 #!/bin/sh
@@ -34,6 +52,7 @@ done
 printf '%s\n' "$url" >> "$FIXTURE_LOG"
 case "$url" in https://github.com/fixture/cache/releases/*|https://github.com/4mGLn/rust-cache-management/releases/*) ;; *) exit 91;; esac
 if [ "$head" = true ]; then
+ printf 'HEAD mode=%s latest=%s\n' "${FIXTURE_LATEST_MODE:-valid}" "${FIXTURE_LATEST:-v0.2.0}" >> "$FIXTURE_LOG"
  case "${FIXTURE_LATEST_MODE:-valid}" in
   http-error) exit 22;;
   invalid) printf 'https://github.com/fixture/cache/releases/tag/not-a-version';;
@@ -78,7 +97,7 @@ install_fixture --prefix "$temp/explicit-prefix" >/dev/null
 [ -f "$temp/explicit-prefix/current" ]
 unset RUST_CACHE_INSTALL_DIR RUST_CACHE_BIN_DIR
 for mode in http-error invalid ambiguous multiple; do
- if FIXTURE_LATEST_MODE="$mode" install_fixture --prefix "$temp/latest-$mode" 2>/dev/null; then exit 1; fi
+ if (export FIXTURE_LATEST_MODE="$mode"; install_fixture --prefix "$temp/latest-$mode" 2>/dev/null); then exit 1; fi
  [ ! -e "$temp/latest-$mode/current" ]
  [ ! -e "$temp/latest-$mode" ]
 done
@@ -170,7 +189,7 @@ esac
 STAT
 chmod +x "$temp/mock/stat"
 for metadata_case in nonroot writable; do
- if FIXTURE_SYSTEM_METADATA="$metadata_case" install_fixture --system --prefix "$temp/system-refused-$metadata_case" --bin-dir "$temp/system-refused-bin-$metadata_case" --repo fixture/cache --version v0.2.0 2>/dev/null; then exit 1; fi
+ if (export FIXTURE_SYSTEM_METADATA="$metadata_case"; install_fixture --system --prefix "$temp/system-refused-$metadata_case" --bin-dir "$temp/system-refused-bin-$metadata_case" --repo fixture/cache --version v0.2.0 2>/dev/null); then exit 1; fi
  [ ! -e "$temp/system-refused-$metadata_case" ]
 done
 install_fixture --system --prefix "$temp/system-mode" --bin-dir "$temp/system-commands" --repo fixture/cache --version v0.2.0 >/dev/null
@@ -198,12 +217,12 @@ fi
 # A source installer rerun can advance latest without replacing old bootstrap code.
 install_fixture --repo fixture/cache --prefix "$temp/rerun-update" --version v0.2.0 >/dev/null
 rerun_manager=$(shasum -a 256 "$temp/rerun-update/manage.sh")
-FIXTURE_LATEST=v0.3.0 install_fixture --repo fixture/cache --prefix "$temp/rerun-update" >/dev/null
+(export FIXTURE_LATEST=v0.3.0; install_fixture --repo fixture/cache --prefix "$temp/rerun-update" >/dev/null)
 [ "$(cat "$temp/rerun-update/current")" = "v0.3.0-$target" ]
 [ "$(cat "$temp/rerun-update/previous")" = "v0.2.0-$target" ]
 [ "$(shasum -a 256 "$temp/rerun-update/manage.sh")" = "$rerun_manager" ]
 printf '# preserve modified primary\n' >> "$temp/rerun-update/bin/rust-cache-management"
-if FIXTURE_LATEST=v0.3.0 install_fixture --repo fixture/cache --prefix "$temp/rerun-update" 2>/dev/null; then exit 1; fi
+if (export FIXTURE_LATEST=v0.3.0; install_fixture --repo fixture/cache --prefix "$temp/rerun-update" 2>/dev/null); then exit 1; fi
 grep -q 'preserve modified primary' "$temp/rerun-update/bin/rust-cache-management"
 sh "$prefix/manage.sh" update --version v0.3.0 >/dev/null
 [ "$(cat "$prefix/current")" = "v0.3.0-$target" ]

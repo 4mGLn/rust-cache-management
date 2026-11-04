@@ -202,8 +202,15 @@ function Activate([string]$Release) {
     Move-Item -Force -LiteralPath (Join-Path $Stage 'current') -Destination (Join-Path $Prefix 'current')
 }
 function Download([string]$Uri,[string]$OutFile) {
-    & curl.exe --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --retry 2 --connect-timeout 15 --max-time 180 --output $OutFile $Uri
-    if ($LASTEXITCODE -ne 0) { throw 'HTTPS release download failed.' }
+    # Keep native curl argv ASCII even when the private stage path is Unicode.
+    # PowerShell supplies its current filesystem location as the native child cwd.
+    $priorLocation=Get-Location
+    try {
+        Set-Location -LiteralPath ([IO.Path]::GetDirectoryName($OutFile))
+        & curl.exe --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --retry 2 --connect-timeout 15 --max-time 180 --output ([IO.Path]::GetFileName($OutFile)) $Uri
+        $downloadExit=$LASTEXITCODE
+    } finally { Set-Location -LiteralPath $priorLocation.Path }
+    if ($downloadExit -ne 0) { throw 'HTTPS release download failed.' }
 }
 $Bootstrap=$Action -eq 'Install'
 $BinSelected=([bool]$BinDir -or [bool]$env:RUST_CACHE_BIN_DIR)
@@ -309,8 +316,23 @@ try {
     Download "$base/$asset" (Join-Path $Stage 'bundle.tar.gz')
     $checks=@([IO.File]::ReadAllLines((Join-Path $Stage 'SHA256SUMS')) | Where-Object { $_ -cmatch ('^[0-9a-f]{64}  '+[regex]::Escape($asset)+'$') })
     if ($checks.Count -ne 1 -or (Hash (Join-Path $Stage 'bundle.tar.gz')) -ne $checks[0].Substring(0,64)) { throw 'Missing, ambiguous, or mismatched release checksum.' }
-    $members=@(& tar.exe -tzf (Join-Path $Stage 'bundle.tar.gz'))
-    if ($LASTEXITCODE -ne 0) { throw 'Archive listing failed.' }
+    # Windows tar may use a narrow argv encoding. Its archive/member arguments
+    # stay ASCII; the Unicode working directory is passed through CreateProcessW.
+    $listingInfo=New-Object Diagnostics.ProcessStartInfo
+    $listingInfo.FileName=(Get-Command tar.exe).Source
+    $listingInfo.WorkingDirectory=$Stage
+    $listingInfo.Arguments='-tzf bundle.tar.gz'
+    $listingInfo.UseShellExecute=$false; $listingInfo.RedirectStandardOutput=$true
+    $listingProcess=New-Object Diagnostics.Process; $listingProcess.StartInfo=$listingInfo
+    try {
+        $null=$listingProcess.Start()
+        $listing=$listingProcess.StandardOutput.ReadToEnd()
+        $listingProcess.WaitForExit()
+        if ($listingProcess.ExitCode -ne 0) { throw 'Archive listing failed.' }
+    } finally { $listingProcess.Dispose() }
+    $members=@()
+    $reader=New-Object IO.StringReader($listing)
+    try { while ($null -ne ($line=$reader.ReadLine())) { $members+=$line } } finally { $reader.Dispose() }
     $expected=@((Payload-Names) + 'MANIFEST.sha256' | Sort-Object)
     if ((($members | Sort-Object) -join "`n") -cne ($expected -join "`n")) { throw 'Archive differs from fixed payload allowlist.' }
     $payload=Join-Path $Stage 'payload'
@@ -320,7 +342,8 @@ try {
     foreach ($member in $expected) {
         $psi=New-Object Diagnostics.ProcessStartInfo
         $psi.FileName=(Get-Command tar.exe).Source
-        $psi.Arguments='-xOzf "'+(Join-Path $Stage 'bundle.tar.gz')+'" "'+$member+'"'
+        $psi.WorkingDirectory=$Stage
+        $psi.Arguments='-xOzf bundle.tar.gz "'+$member+'"'
         $psi.UseShellExecute=$false; $psi.RedirectStandardOutput=$true
         $proc=New-Object Diagnostics.Process; $proc.StartInfo=$psi
         $null=$proc.Start()

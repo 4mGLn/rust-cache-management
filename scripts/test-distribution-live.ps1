@@ -17,7 +17,8 @@ try {
         if ($attempt -lt 11) { Start-Sleep -Seconds 5 }
     }
     if ($ExpectedVersion -and $latest -cne $ExpectedVersion) { throw 'Latest API does not match expected release' }
-    $env:RUST_CACHE_INSTALL_DIR=Join-Path $temp 'installed'
+    $unicodeSuffix=([string][char]0xD55C)+([string][char]0xAE00)
+    $env:RUST_CACHE_INSTALL_DIR=Join-Path $temp ("installed space's "+$unicodeSuffix)
     $env:RUST_CACHE_BIN_DIR=Join-Path $temp 'commands'
     $env:PATH=$env:RUST_CACHE_BIN_DIR+';'+$env:PATH
     function Invoke-Installer {
