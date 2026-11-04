@@ -48,7 +48,7 @@ jobs:
           RELEASE_VERSION: ${{ github.ref_name }}
           RELEASE_TARGET: ${{ matrix.target }}
         run: |
-          sh scripts/test-distribution.sh
+          RCM_TEST_BINARY="$PWD/target/$RELEASE_TARGET/release/rust-cache-inspect" sh scripts/test-distribution.sh
           sh scripts/package.sh "$RELEASE_VERSION" "$RELEASE_TARGET" "target/$RELEASE_TARGET/release/rust-cache-inspect" dist
       - name: Windows parse and packaging
         if: runner.os == 'Windows'
