@@ -444,6 +444,230 @@ fn unrelated_discovery_symlink_is_read_only_and_does_not_block_setup() {
 }
 #[cfg(unix)]
 #[test]
+fn dangling_unrelated_discovery_links_are_preserved_with_warnings() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    let root = f.home.join(".agents/skills");
+    fs::create_dir_all(&root).unwrap();
+    let link = root.join("paseo-progress");
+    let missing = f.root.join("missing-plugin/skills/paseo-progress");
+    symlink(&missing, &link).unwrap();
+    let warning = |json: &Value| {
+        let matches: Vec<_> = json["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|w| w.contains(&*link.to_string_lossy()))
+            .collect();
+        assert_eq!(matches.len(), 1, "{json}");
+        assert!(matches[0].contains(&*missing.to_string_lossy()), "{json}");
+    };
+    for (extra, expected, status) in [
+        (Some("--dry-run"), 0, "planned"),
+        (None, 4, "consent_required"),
+    ] {
+        let mut args = vec!["setup", "--agent", "codex,claude", "--json"];
+        args.extend(extra);
+        let (code, json) = f.run(&args);
+        assert_eq!(code, expected, "{json}");
+        assert_eq!(json["status"], status);
+        warning(&json);
+        assert!(!f.skill().exists());
+        assert!(!f.home.join(".claude").exists());
+        assert!(!f.home.join(".rust-cache-management-setup").exists());
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        assert_eq!(fs::read_link(&link).unwrap(), missing);
+    }
+    for expected_action in ["created", "managed_reuse"] {
+        let (code, json) = f.run(&["setup", "--agent", "codex,claude", "--yes", "--json"]);
+        assert_eq!(code, 0, "{json}");
+        assert_eq!(json["status"], "complete");
+        assert!(json["actions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|action| action["status"] == expected_action));
+        warning(&json);
+        assert_eq!(fs::read_link(&link).unwrap(), missing);
+        assert!(!missing.exists());
+    }
+    assert!(f.skill().join("SKILL.md").is_file());
+    assert!(f
+        .home
+        .join(".claude/skills/rust-cache-management/SKILL.md")
+        .is_file());
+}
+
+#[test]
+fn large_skill_bodies_do_not_exhaust_discovery_metadata_budget() {
+    let f = Fixture::new();
+    let other = f.home.join(".agents/skills/large-unrelated");
+    fs::create_dir_all(&other).unwrap();
+    let bytes = format!(
+        "---\nname: large-unrelated\ndescription: Valid large skill\n---\n{}",
+        "한글 body\n".repeat(20000)
+    );
+    fs::write(other.join("SKILL.md"), &bytes).unwrap();
+    let boundary = f.home.join(".agents/skills/boundary-header");
+    fs::create_dir(&boundary).unwrap();
+    let prefix = "---\r\nname: boundary-header\r\n# ";
+    let suffix = "\r\n---\r\n";
+    let boundary_bytes = format!(
+        "{prefix}{}{suffix}{}",
+        "x".repeat(65536 - prefix.len() - suffix.len()),
+        "한글 body\n".repeat(20000)
+    );
+    fs::write(boundary.join("SKILL.md"), &boundary_bytes).unwrap();
+    for extra in ["--dry-run", "--yes"] {
+        let (code, json) = f.run(&["setup", "--agent", "codex", extra, "--json"]);
+        assert_eq!(code, 0, "{json}");
+        assert_eq!(fs::read(other.join("SKILL.md")).unwrap(), bytes.as_bytes());
+        assert_eq!(
+            fs::read(boundary.join("SKILL.md")).unwrap(),
+            boundary_bytes.as_bytes()
+        );
+        if extra == "--dry-run" {
+            assert!(!f.skill().exists());
+            assert!(!f.home.join(".rust-cache-management-setup").exists());
+        }
+    }
+    assert!(f.skill().join("SKILL.md").is_file());
+
+    let f = Fixture::new();
+    let manual = f.home.join(".agents/skills/renamed-large-skill");
+    f.manual(&manual);
+    let mut bytes = fs::read(manual.join("SKILL.md")).unwrap();
+    bytes.extend("Large manual body\n".repeat(10000).as_bytes());
+    fs::write(manual.join("SKILL.md"), &bytes).unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["actions"][0]["status"], "manual_present");
+    assert_eq!(json["actions"][0]["target"], manual.to_str().unwrap());
+    assert!(!f.skill().exists());
+    assert!(!f.home.join(".rust-cache-management-setup").exists());
+    let second = f.home.join(".agents/skills/second-large-skill");
+    fs::create_dir(&second).unwrap();
+    fs::write(second.join("SKILL.md"), &bytes).unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(fs::read(manual.join("SKILL.md")).unwrap(), bytes);
+    assert!(!f.skill().exists());
+    assert!(!f.home.join(".rust-cache-management-setup").exists());
+}
+
+#[test]
+fn invalid_or_oversized_discovery_headers_still_block_setup() {
+    let oversized = format!("---\nname: unrelated\n# {}\n---\n", "x".repeat(65536));
+    for bytes in [
+        oversized.as_bytes(),
+        b"---\nname: unrelated\n# Unclosed header\n",
+        b"---\nname: unrelated\nname: rust-cache-management\n---\n",
+        b"---\nname: unrelated\ndescription: \xff\n---\n",
+    ] {
+        let f = Fixture::new();
+        let other = f.home.join(".agents/skills/unrelated");
+        fs::create_dir_all(&other).unwrap();
+        let skill = other.join("SKILL.md");
+        fs::write(&skill, bytes).unwrap();
+        let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+        assert_eq!(code, 3, "{json}");
+        assert!(
+            json["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e.as_str().unwrap().contains(&*skill.to_string_lossy())),
+            "{json}"
+        );
+        assert_eq!(fs::read(&skill).unwrap(), bytes);
+        assert!(!f.skill().exists());
+        assert!(!f.home.join(".rust-cache-management-setup").exists());
+    }
+    let f = Fixture::new();
+    fs::create_dir_all(f.home.join(".agents/skills/unrelated/SKILL.md")).unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert!(!f.skill().exists());
+    assert!(!f.home.join(".rust-cache-management-setup").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_reserved_discovery_links_and_roots_still_conflict() {
+    use std::os::unix::fs::symlink;
+    for relative in [
+        ".agents/skills/rust-cache-management",
+        ".agents/skills/rust-cache-management.md",
+        ".agents/skills",
+        ".agents/skills/other-skill/SKILL.md",
+    ] {
+        let f = Fixture::new();
+        let link = f.home.join(relative);
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        let missing = f.root.join("missing-registration");
+        symlink(&missing, &link).unwrap();
+        let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+        assert_eq!(code, 3, "{json}");
+        assert_eq!(json["status"], "conflict");
+        assert!(
+            json["errors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e.as_str().unwrap().contains(&*link.to_string_lossy())),
+            "{json}"
+        );
+        assert!(!f.home.join(".rust-cache-management-setup").exists());
+        assert_eq!(fs::read_link(&link).unwrap(), missing);
+        assert!(!missing.exists());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn dangling_discovery_warning_survives_other_conflicts_and_cycles_are_refused() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    let root = f.home.join(".agents/skills");
+    fs::create_dir_all(&root).unwrap();
+    let link = root.join("unrelated");
+    let missing = f.root.join("missing-plugin");
+    symlink(&missing, &link).unwrap();
+    fs::create_dir_all(f.home.join(".config/opencode")).unwrap();
+    fs::write(f.home.join(".config/opencode/opencode.json"), "{}").unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "codex,opencode", "--yes", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert!(json["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|action| action["detail"].as_str().unwrap().contains("manual review")));
+    assert!(json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains(&*link.to_string_lossy())));
+    assert!(!f.home.join(".rust-cache-management-setup").exists());
+    assert!(!f.skill().exists());
+    assert_eq!(fs::read_link(&link).unwrap(), missing);
+
+    let cycle = root.join("loop");
+    symlink(&cycle, &cycle).unwrap();
+    let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert!(json["errors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e.as_str().unwrap().contains(&*cycle.to_string_lossy())));
+    assert_eq!(fs::read_link(&cycle).unwrap(), cycle);
+    assert!(!f.home.join(".rust-cache-management-setup").exists());
+    assert!(!f.skill().exists());
+}
+
+#[cfg(unix)]
+#[test]
 fn two_discovery_aliases_to_same_rust_skill_are_still_duplicates() {
     use std::os::unix::fs::symlink;
     let f = Fixture::new();

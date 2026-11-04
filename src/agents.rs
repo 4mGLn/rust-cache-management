@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, File, Metadata, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -300,6 +300,44 @@ fn skill_name(bytes: &[u8]) -> Result<String, String> {
         }
     }
     Err("Unclosed skill frontmatter".into())
+}
+fn discovery_frontmatter(path: &Path) -> io::Result<Vec<u8>> {
+    const MAX_HEADER: u64 = 65536;
+    safe(path)?;
+    if !fs::symlink_metadata(path)?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Non-regular skill metadata file",
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let mut reader = BufReader::new(file.take(MAX_HEADER + 1));
+    let mut bytes = Vec::new();
+    loop {
+        let start = bytes.len();
+        if reader.read_until(b'\n', &mut bytes)? == 0 {
+            return Ok(bytes);
+        }
+        if bytes.len() as u64 > MAX_HEADER {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Skill frontmatter exceeds 65536-byte discovery budget",
+            ));
+        }
+        let line = &bytes[start..];
+        let line = line.strip_suffix(b"\n").unwrap_or(line);
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if (start == 0 && line != b"---") || (start != 0 && line == b"---") {
+            return Ok(bytes);
+        }
+    }
 }
 fn source(exe: &Path) -> io::Result<Payload> {
     safe(exe)?;
@@ -645,7 +683,7 @@ fn custom_problem(ctx: &Context, opt: &Options, id: &str) -> io::Result<Option<S
     }
     Ok(None)
 }
-fn scan(roots: &[Root]) -> Result<Vec<Existing>, String> {
+fn scan(roots: &[Root], warnings: &mut Vec<String>) -> Result<Vec<Existing>, String> {
     let mut found = Vec::new();
     let mut budget = MAX_SCAN;
     for root in roots {
@@ -657,7 +695,12 @@ fn scan(roots: &[Root]) -> Result<Vec<Existing>, String> {
             // Discovery may read supported provider symlinks. Writes never use
             // these canonical targets; preserve each lexical registration so
             // two Gemini aliases to one directory still count as duplicates.
-            let canonical = fs::canonicalize(&logical).map_err(|e| e.to_string())?;
+            let canonical = fs::canonicalize(&logical).map_err(|e| {
+                format!(
+                    "Cannot resolve discovery directory {}: {e}",
+                    logical.display()
+                )
+            })?;
             safe(&canonical).map_err(|e| e.to_string())?;
             if !ancestors.insert(canonical.clone()) {
                 return Err("Discovery link cycle requires manual review".into());
@@ -665,8 +708,24 @@ fn scan(roots: &[Root]) -> Result<Vec<Existing>, String> {
             let skill = canonical.join("SKILL.md");
             let mut leaf = false;
             if exists(&skill).map_err(|e| e.to_string())? {
-                let readable = fs::canonicalize(&skill).map_err(|e| e.to_string())?;
-                let name = skill_name(&bounded(&readable, 65536).map_err(|e| e.to_string())?)?;
+                let readable = fs::canonicalize(&skill).map_err(|e| {
+                    format!(
+                        "Cannot resolve skill metadata {}: {e}",
+                        logical.join("SKILL.md").display()
+                    )
+                })?;
+                let header = discovery_frontmatter(&readable).map_err(|e| {
+                    format!(
+                        "Cannot read skill metadata {}: {e}",
+                        logical.join("SKILL.md").display()
+                    )
+                })?;
+                let name = skill_name(&header).map_err(|e| {
+                    format!(
+                        "Invalid skill metadata {}: {e}",
+                        logical.join("SKILL.md").display()
+                    )
+                })?;
                 if logical.file_name().is_some_and(|n| n == NAME) && name != NAME {
                     return Err(format!(
                         "Canonical skill folder declares a different skill name: {}",
@@ -705,7 +764,9 @@ fn scan(roots: &[Root]) -> Result<Vec<Existing>, String> {
                     && root.agents.contains("opencode")
                     && entry.file_name() == format!("{NAME}.md").as_str()
                 {
-                    let readable = fs::canonicalize(&path).map_err(|e| e.to_string())?;
+                    let readable = fs::canonicalize(&path).map_err(|e| {
+                        format!("Cannot resolve skill registration {}: {e}", path.display())
+                    })?;
                     bounded(&readable, 65536).map_err(|e| e.to_string())?;
                     found.push(Existing {
                         path: logical.join(entry.file_name()),
@@ -716,7 +777,37 @@ fn scan(roots: &[Root]) -> Result<Vec<Existing>, String> {
                 }
                 let info = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
                 let directory = if linked(&info) {
-                    let resolved = fs::canonicalize(&path).map_err(|e| e.to_string())?;
+                    let logical_path = logical.join(entry.file_name());
+                    let resolved = match fs::canonicalize(&path) {
+                        Ok(resolved) => resolved,
+                        Err(e)
+                            if e.kind() == io::ErrorKind::NotFound
+                                && entry.file_name() != NAME
+                                && entry.file_name() != format!("{NAME}.md").as_str() =>
+                        {
+                            let target = fs::read_link(&path).map_err(|e| {
+                                format!(
+                                    "Cannot read discovery link {}: {e}",
+                                    logical_path.display()
+                                )
+                            })?;
+                            let warning = format!(
+                                "Dangling discovery link preserved and skipped: {} -> {}",
+                                logical_path.display(),
+                                target.display()
+                            );
+                            if !warnings.contains(&warning) {
+                                warnings.push(warning);
+                            }
+                            continue;
+                        }
+                        Err(e) => {
+                            return Err(format!(
+                                "Cannot resolve discovery link {}: {e}",
+                                logical_path.display()
+                            ));
+                        }
+                    };
                     safe(&resolved).map_err(|e| e.to_string())?;
                     fs::metadata(resolved).map_err(|e| e.to_string())?.is_dir()
                 } else {
@@ -836,8 +927,9 @@ fn plan(
     opt: &Options,
     roots: &[Root],
     payload: &Payload,
+    warnings: &mut Vec<String>,
 ) -> Result<Vec<Action>, String> {
-    let existing = scan(roots)?;
+    let existing = scan(roots, warnings)?;
     let mut groups: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     let mut result = Vec::new();
     for id in &opt.selected {
@@ -1173,7 +1265,7 @@ fn execute(ctx: &Context, opt: &Options, roots: &[Root], response: &mut Response
             return 1;
         }
     };
-    response.actions = match plan(ctx, opt, roots, &payload) {
+    response.actions = match plan(ctx, opt, roots, &payload, &mut response.warnings) {
         Ok(p) => p,
         Err(e) => {
             response.status = "conflict".into();
@@ -1217,7 +1309,8 @@ fn execute(ctx: &Context, opt: &Options, roots: &[Root], response: &mut Response
             return Err(io::Error::other("Linked lock file preserved"));
         }
         lock.try_lock_exclusive()?;
-        let refreshed = plan(ctx, opt, roots, &payload).map_err(io::Error::other)?;
+        let refreshed =
+            plan(ctx, opt, roots, &payload, &mut response.warnings).map_err(io::Error::other)?;
         if refreshed.iter().any(|a| a.status == "conflict") {
             response.actions = refreshed;
             return Err(io::Error::other("Setup preconditions changed under lock"));

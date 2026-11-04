@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Preserve and warn about unrelated dangling skill-discovery links instead of aborting setup with an unqualified missing-file error; keep reserved Rust skill paths, discovery roots and other scan failures blocked. Document that any selected-agent conflict prevents all selected writes.
+- Limit discovery reads to skill frontmatter, allowing existing long skill bodies while retaining a 64 KiB header limit and strict metadata validation with file-specific errors.
+
 ## 0.2.2 — 2026-11-04
 
 - Allow verified same-scope identical managed/fresh OpenCode aliases for combined and sequential agent setup; keep manual, modified, uncertain and Gemini alias conflicts blocked.
