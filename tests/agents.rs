@@ -897,3 +897,203 @@ fn identical_owned_gemini_aliases_remain_a_conflict() {
     assert_eq!(fs::read(native.join("SKILL.md")).unwrap(), before);
     assert_eq!(fs::read(f.skill().join("SKILL.md")).unwrap(), before);
 }
+
+#[test]
+fn verify_configuration_only_detection_is_not_compatibility_proof() {
+    let f = Fixture::new();
+    fs::create_dir(f.home.join(".codex")).unwrap();
+    let (code, json) = f.run(&["detect", "--json"]);
+    assert_eq!(code, 0);
+    let codex = &json["agents"][0];
+    assert_eq!(codex["compatibility"], "not_checked");
+    assert_eq!(codex["version_status"], "not_checked");
+    let (code, json) = f.run(&["verify", "--agent", "codex", "--json"]);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(json["status"], "partial");
+    assert_eq!(json["agents"][0]["compatibility"], "unverified");
+    #[cfg(unix)]
+    assert_eq!(json["agents"][0]["version_status"], "not_available");
+    #[cfg(not(unix))]
+    assert_eq!(json["agents"][0]["catalog_status"], "unsupported_platform");
+    assert_eq!(fs::read_dir(&f.home).unwrap().count(), 1);
+    let empty = Fixture::new();
+    let (code, json) = empty.run(&["verify", "--all-detected", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["status"], "complete");
+    assert_ne!(json["status"], "verified");
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_verify_executes_only_catalog_protocol_and_default_commands_stay_passive() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new();
+    let providers = f.root.join("providers");
+    fs::create_dir(&providers).unwrap();
+    let script = providers.join("codex");
+    let calls = f.root.join("provider-calls");
+    let runtime_home = f.root.join("runtime-home");
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    let catalog = serde_json::json!({"id":2,"result":{"data":[{"skills":[{"name":"rust-cache-management","path":f.skill().join("SKILL.md"),"enabled":true}],"errors":[{"message":"unrelated malformed skill"}]}]}});
+    let text = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {calls}\nif [ \"$1\" = --version ]; then printf 'codex-cli 9.8.7\\n'; exit 0; fi\nprintf '%s' \"$HOME\" > {home}\n[ -z \"${{OPENAI_API_KEY:-}}\" ] || exit 90\n[ -z \"${{ANTHROPIC_API_KEY:-}}\" ] || exit 91\nIFS= read -r request\nprintf '%s\\n' \"$request\" >> {calls}\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nIFS= read -r request\nprintf '%s\\n' \"$request\" >> {calls}\nIFS= read -r request\nprintf '%s\\n' \"$request\" >> {calls}\nprintf '%s\\n' {catalog}\nwhile IFS= read -r request; do printf '%s\\n' \"$request\" >> {calls}; done\n",
+        calls=quote(calls.to_str().unwrap()), home=quote(runtime_home.to_str().unwrap()), catalog=quote(&catalog.to_string())
+    );
+    fs::write(&script, text).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    for args in [
+        vec!["detect", "--json"],
+        vec!["setup", "--agent", "codex", "--dry-run", "--json"],
+    ] {
+        let output = f.cmd(&args).env("PATH", &providers).output().unwrap();
+        let (code, json) = Fixture::output(output);
+        assert_eq!(code, 0, "{json}");
+        assert!(!calls.exists());
+    }
+    let (code, json) = f.run(&["setup", "--agent", "codex", "--yes", "--json"]);
+    assert_eq!(code, 0, "{json}");
+    assert!(!calls.exists());
+    let before = fs::read(f.skill().join("SKILL.md")).unwrap();
+    let output = f
+        .cmd(&["verify", "--agent", "codex", "--json"])
+        .env("PATH", &providers)
+        .env("OPENAI_API_KEY", "must-not-leak")
+        .env("ANTHROPIC_API_KEY", "must-not-leak")
+        .output()
+        .unwrap();
+    let (code, json) = Fixture::output(output);
+    assert_eq!(code, 0, "{json}");
+    assert_eq!(json["status"], "verified");
+    assert_eq!(json["agents"][0]["version"], "9.8.7");
+    assert_eq!(json["agents"][0]["catalog_status"], "enabled");
+    assert_eq!(
+        json["agents"][0]["runtime_scope"],
+        "isolated_native_catalog"
+    );
+    assert!(json["agents"][0]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w.as_str().unwrap().contains("unrelated")));
+    let requests = fs::read_to_string(&calls).unwrap();
+    assert!(requests.contains("skills/list"));
+    assert!(!requests.contains("turn/start"));
+    assert!(!requests.contains("thread/start"));
+    let private = PathBuf::from(fs::read_to_string(&runtime_home).unwrap());
+    assert_ne!(private, f.home);
+    assert!(
+        !private.exists(),
+        "Private provider runtime was not removed"
+    );
+    assert_eq!(fs::read(f.skill().join("SKILL.md")).unwrap(), before);
+
+    use std::os::unix::ffi::OsStringExt;
+    let invalid_home = f
+        .root
+        .join(std::ffi::OsString::from_vec(b"invalid-home-\xff".to_vec()));
+    fs::create_dir_all(invalid_home.join("skills")).unwrap();
+    let output = f
+        .cmd(&["verify", "--agent", "codex", "--json"])
+        .env("PATH", &providers)
+        .env("CODEX_HOME", &invalid_home)
+        .output()
+        .unwrap();
+    let (code, json) = Fixture::output(output);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(json["agents"][0]["version"], "9.8.7");
+    assert_eq!(
+        json["agents"][0]["catalog_status"],
+        "unsupported_configuration"
+    );
+
+    fs::write(
+        &script,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then printf 'codex-cli 9.8.7\\n'; fi\n",
+    )
+    .unwrap();
+    let output = f
+        .cmd(&["verify", "--agent", "codex", "--json"])
+        .env("PATH", &providers)
+        .output()
+        .unwrap();
+    let (code, json) = Fixture::output(output);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(json["agents"][0]["version_status"], "reported");
+    assert_eq!(json["agents"][0]["compatibility"], "unverified");
+    assert_eq!(json["agents"][0]["catalog_status"], "failed");
+}
+
+#[cfg(unix)]
+#[test]
+fn hermes_verification_snapshots_metadata_without_source_hub_writes() {
+    use std::os::unix::fs::PermissionsExt;
+    fn snapshot(root: &Path) -> Vec<(PathBuf, String)> {
+        fn walk(root: &Path, folder: &Path, result: &mut Vec<(PathBuf, String)>) {
+            for entry in fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                let kind = fs::symlink_metadata(&path).unwrap();
+                let value = if kind.is_dir() {
+                    "directory".into()
+                } else if kind.file_type().is_symlink() {
+                    format!("link:{}", fs::read_link(&path).unwrap().display())
+                } else {
+                    format!("{:x}", Sha256::digest(fs::read(&path).unwrap()))
+                };
+                result.push((path.strip_prefix(root).unwrap().to_owned(), value));
+                if kind.is_dir() {
+                    walk(root, &path, result);
+                }
+            }
+        }
+        let mut result = Vec::new();
+        walk(root, root, &mut result);
+        result.sort();
+        result
+    }
+    let f = Fixture::new();
+    let source = f.home.join(".hermes/skills");
+    let skill = source.join("group/rust-cache-management");
+    f.manual(&skill);
+    fs::write(source.join("user-notes"), "preserve supporting files").unwrap();
+    let before = snapshot(&source);
+    let providers = f.root.join("providers");
+    fs::create_dir(&providers).unwrap();
+    let script = providers.join("hermes");
+    let private_root = f.root.join("private-hermes-root");
+    let calls = f.root.join("hermes-calls");
+    let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+    fs::write(&script, format!(
+        "#!/bin/sh\n[ \"$PYTHONDONTWRITEBYTECODE\" = 1 ] || exit 91\nprintf '%s\\n' \"$*\" >> {calls}\nif [ \"$1\" = --version ]; then printf 'Hermes Agent v0.21.3 (2026.9.14) upstream hash\\n'; exit 0; fi\n/bin/mkdir -p \"$HERMES_HOME/skills/.hub\"\nprintf 'native hub write' > \"$HERMES_HOME/skills/.hub/audit.log\"\nprintf '%s' \"$HERMES_HOME\" > {private}\n[ -f \"$HERMES_HOME/skills/group/rust-cache-management/SKILL.md\" ] || exit 92\n[ ! -L \"$HERMES_HOME/skills\" ] || exit 93\n[ ! -L \"$HERMES_HOME/skills/group/rust-cache-management/SKILL.md\" ] || exit 94\nprintf '│ rust-cache-management │ │ local │ local │ enabled │\\n'\n",
+        calls=quote(calls.to_str().unwrap()), private=quote(private_root.to_str().unwrap())
+    )).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = f
+        .cmd(&["verify", "--agent", "hermes", "--json"])
+        .env("PATH", &providers)
+        .output()
+        .unwrap();
+    let (code, json) = Fixture::output(output);
+    assert_eq!(code, 3, "{json}");
+    assert_eq!(json["status"], "partial");
+    let hermes = json["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "hermes")
+        .unwrap();
+    assert_eq!(hermes["version_status"], "reported");
+    assert_eq!(hermes["version"], "0.21.3");
+    assert_eq!(hermes["catalog_status"], "enabled");
+    assert_eq!(hermes["compatibility"], "parser_verified");
+    assert_eq!(hermes["runtime_scope"], "isolated_skill_snapshot");
+    assert_eq!(snapshot(&source), before);
+    assert!(!source.join(".hub").exists());
+    let private = PathBuf::from(fs::read_to_string(private_root).unwrap());
+    assert!(
+        !private.exists(),
+        "Private snapshot/hub runtime was not removed"
+    );
+    let calls = fs::read_to_string(calls).unwrap();
+    assert!(calls.contains("--version"));
+    assert!(calls.contains("skills list --source local --enabled-only"));
+}

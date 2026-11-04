@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add explicit native `agents verify` version/catalog probes with isolated runtime state, bounded Unix process groups and structured evidence; keep detect/setup nonexecuting and distinguish unchecked detection from verified isolated catalog discovery. Use bounded private metadata-file snapshots for Hermes to contain catalog hub writes, report parser-only evidence separately, and disable Python bytecode-cache writes. Windows verification reports unsupported platform without executing providers.
 - Preserve and warn about unrelated dangling skill-discovery links instead of aborting setup with an unqualified missing-file error; keep reserved Rust skill paths, discovery roots and other scan failures blocked. Document that any selected-agent conflict prevents all selected writes.
 - Limit discovery reads to skill frontmatter, allowing existing long skill bodies while retaining a 64 KiB header limit and strict metadata validation with file-specific errors.
 

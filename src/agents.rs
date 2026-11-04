@@ -1,4 +1,5 @@
-//! Explicit, create/reuse-only skill registration. Never executes provider CLIs.
+//! Passive detection/setup and explicitly requested native catalog verification.
+mod verify;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -38,6 +39,11 @@ struct Agent {
     detected: bool,
     version: Option<String>,
     compatibility: &'static str,
+    version_status: &'static str,
+    catalog_status: &'static str,
+    runtime_scope: &'static str,
+    source_paths: Vec<PathBuf>,
+    reason: String,
     evidence: Vec<String>,
     warnings: Vec<String>,
 }
@@ -458,6 +464,10 @@ fn context() -> io::Result<Context> {
         "OPENCODE_CONFIG_CONTENT",
         "OPENCODE_DISABLE_EXTERNAL_SKILLS",
         "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+        "SystemRoot",
+        "WINDIR",
+        "ComSpec",
+        "PATHEXT",
     ] {
         if let Some(value) = std::env::var_os(name).filter(|v| !v.is_empty()) {
             env.insert(name.into(), value);
@@ -611,7 +621,10 @@ fn detect(ctx: &Context, _roots: &[Root]) -> Vec<Agent> {
             _ => env_path(ctx, "HERMES_HOME", ctx.home.join(".hermes")),
         };
         if config.is_dir() { evidence.push(format!("Configuration directory present: {}", config.display())); }
-        Agent { id: id.to_string(), detected: !evidence.is_empty(), version: None, compatibility: "unverified", evidence,
+        Agent { id: id.to_string(), detected: !evidence.is_empty(), version: None,
+            compatibility: if evidence.is_empty() { "not_detected" } else { "not_checked" },
+            version_status: "not_checked", catalog_status: "not_checked", runtime_scope: "none", source_paths: Vec::new(),
+            reason: "Passive discovery does not execute agents; run agents verify to check installed versions and native catalogs.".into(), evidence,
             warnings: vec![match *id {
                 "gemini" => "Shared .agents support documented from 0.28.0; catalog tested at 0.66.0 only. Installed version is unknown; --yes accepts this documented-path assumption.",
                 "hermes" => "NousResearch identity/version and profile sources are not certified by a matching command name. Project trust is separate.",
@@ -1121,12 +1134,12 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
         command: args
             .next()
             .and_then(|v| v.into_string().ok())
-            .ok_or("Expected detect or setup")?,
+            .ok_or("Expected detect, setup or verify")?,
         scope: "user".into(),
         ..Default::default()
     };
-    if !["detect", "setup"].contains(&o.command.as_str()) {
-        return Err("Expected agents detect or agents setup".into());
+    if !["detect", "setup", "verify"].contains(&o.command.as_str()) {
+        return Err("Expected agents detect, agents setup or agents verify".into());
     }
     while let Some(arg) = args.next() {
         match arg.to_str() {
@@ -1174,7 +1187,12 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
     {
         return Err("detect accepts only --project and --json".into());
     }
-    if o.command == "setup" {
+    if o.command == "verify" && (o.yes || o.dry) {
+        return Err(
+            "verify executes read-only catalog probes; --yes and --dry-run are setup-only".into(),
+        );
+    }
+    if o.command == "setup" || o.command == "verify" {
         if o.selected.is_empty() && !o.all {
             return Err("Select --agent or --all-detected".into());
         }
@@ -1192,7 +1210,7 @@ pub fn run(args: Vec<OsString>) -> i32 {
         let help = serde_json::json!({
             "schema_version": 1, "command": "help", "scope": "user", "dry_run": true,
             "status": "help", "agents": [], "actions": [], "errors": [], "warnings": [],
-            "usage": "agents detect [--project ABS] [--json]\nagents setup (--agent codex,claude,gemini,opencode,hermes | --all-detected) [--scope user|project] [--project ABS] [--dry-run] [--yes] [--json]\nRepeat --agent or use comma-separated names. Project scope requires --project. Setup is create/reuse-only; manual or modified files are preserved. Writes require --yes and create skill copies plus HOME/.rust-cache-management-setup records/lock. Detection and dry-run never write or execute providers. Unknown versions remain unverified.\nExit: 0 success/reuse/preview/help, 1 IO, 2 invalid, 3 conflict, 4 consent required."
+            "usage": "agents detect [--project ABS] [--json]\nagents setup (--agent codex,claude,gemini,opencode,hermes | --all-detected) [--scope user|project] [--project ABS] [--dry-run] [--yes] [--json]\nRepeat --agent or use comma-separated names. Project scope requires --project. agents verify (--agent IDS | --all-detected) [--scope user|project] [--project ABS] --json explicitly executes selected provider version/catalog probes in private runtime directories; Unix only. Setup is create/reuse-only; manual or modified files are preserved. Writes require --yes and create skill copies plus HOME/.rust-cache-management-setup records/lock. Detection and setup never execute providers. Passive compatibility is not_checked/not_detected; verify reports scoped native catalog evidence separately; Hermes parser_verified uses an isolated metadata-file snapshot and remains overall partial.\nExit: 0 success/reuse/preview/help/verified, 1 IO, 2 invalid, 3 conflict or verification incomplete, 4 consent required."
         });
         let mut out = io::stdout().lock();
         return if serde_json::to_writer_pretty(&mut out, &help).is_ok() && writeln!(out).is_ok() {
@@ -1234,7 +1252,11 @@ pub fn run(args: Vec<OsString>) -> i32 {
                                 .map(|a| a.id.clone())
                                 .collect();
                         }
-                        execute(&ctx, &opt, &roots, &mut response)
+                        if opt.command == "verify" {
+                            verify::run(&ctx, &opt, &roots, &mut response)
+                        } else {
+                            execute(&ctx, &opt, &roots, &mut response)
+                        }
                     }
                 }
             }

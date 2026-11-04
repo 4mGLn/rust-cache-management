@@ -45,7 +45,7 @@ function run(home,args,code=0) {
   assert.ifError(result.error);
   assert.equal(result.status,code,JSON.stringify({args,status:result.status,stdout:result.stdout,stderr:result.stderr}));
   const parsed=JSON.parse(result.stdout); assert.equal(parsed.schema_version,1);assert.equal(parsed.command,args[0]);assert(Array.isArray(parsed.agents)&&Array.isArray(parsed.actions)&&Array.isArray(parsed.errors)&&Array.isArray(parsed.warnings));
-  assert(['detected','planned','consent_required','complete','conflict','io_error','invalid','help'].includes(parsed.status));return parsed;
+  assert(['detected','planned','consent_required','complete','conflict','io_error','invalid','help','verified','partial'].includes(parsed.status));return parsed;
 }
 function runWrapped(home,args,code=0) {
   const env=environment(home);
@@ -96,6 +96,12 @@ try {
   const home=makeHome("user home's unicode 한글");
   assert.equal(run(home,['detect']).status,'detected');
   const initial=snapshot(home);
+  const verification=run(home,['verify','--agent','codex'],3);
+  assert.equal(verification.status,'partial');
+  const codexVerification=verification.agents.find(agent=>agent.id==='codex');
+  assert.equal(codexVerification.compatibility,'unverified');
+  assert(process.platform==='win32'?codexVerification.catalog_status==='unsupported_platform':codexVerification.version_status==='not_available');
+  assert.equal(snapshot(home),initial,'Unavailable provider verification changed user state');
   assert.equal(setup(home,['--dry-run']).status,'planned'); assert.equal(snapshot(home),initial,'Dry run changed user state');
   assert.equal(setup(home,[],4).status,'consent_required'); assert.equal(snapshot(home),initial,'Missing consent changed user state');
   setup(home,['--yes']);
@@ -178,6 +184,10 @@ try {
     }
     if(process.platform==='win32')windowsHostControls(wrappedHome);
     const wrappedBefore=snapshot(wrappedHome);
+    const wrappedVerification=runWrapped(wrappedHome,['verify','--agent','codex'],3);
+    assert.equal(wrappedVerification.status,'partial');
+    assert.equal(wrappedVerification.agents.find(agent=>agent.id==='codex').compatibility,'unverified');
+    assert.equal(snapshot(wrappedHome),wrappedBefore,'Wrapped unavailable verification changed user state');
     console.error('Agent setup fixture stage: management wrapper preview');
     const preview=runWrapped(wrappedHome,['setup','--agent','codex','--scope','project','--project',wrappedProject,'--dry-run']);
     assert.equal(preview.status,'planned');
